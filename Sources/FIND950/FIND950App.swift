@@ -4,6 +4,29 @@ import S950Library
 import SwiftUI
 import UniformTypeIdentifiers
 
+private enum BundledAkaiUtil {
+    static func locate() throws -> URL {
+        let resources = Bundle.main.resourceURL
+            ?? Bundle.main.bundleURL.appendingPathComponent(
+                "Contents/Resources",
+                isDirectory: true
+            )
+        let helper = resources.appendingPathComponent("akaiutil", isDirectory: false)
+        guard FileManager.default.isExecutableFile(atPath: helper.path) else {
+            throw BundledAkaiUtilError.unavailable
+        }
+        return helper
+    }
+}
+
+private enum BundledAkaiUtilError: LocalizedError {
+    case unavailable
+
+    var errorDescription: String? {
+        "FIND950 is incomplete because its included AKAI Util helper is missing or damaged. Reinstall FIND950."
+    }
+}
+
 @main
 struct FIND950App: App {
     @StateObject private var model = Find950Model()
@@ -78,6 +101,12 @@ struct FIND950App: App {
                     suitePreferences.inspectorVisible.toggle()
                 }
                 .keyboardShortcut("i", modifiers: [.command, .option])
+                Button(
+                    suitePreferences.collectionVisible
+                        ? "Hide Collection Pane" : "Show Collection Pane"
+                ) {
+                    suitePreferences.collectionVisible.toggle()
+                }
                 Divider()
                 Button("Zoom Out") { suitePreferences.zoomOut() }
                     .keyboardShortcut("-", modifiers: .command)
@@ -206,6 +235,15 @@ struct BrowserNotice: Identifiable {
     let message: String
 }
 
+private struct FindSafeEjectCleanupError: LocalizedError {
+    let mediaName: String
+    let detail: String
+
+    var errorDescription: String? {
+        "Safe Eject stopped because \(mediaName) could not be verified clean. The volume remains mounted.\n\n\(detail)\n\nGrant FIND950 Full Disk Access in System Settings → Privacy & Security → Full Disk Access, quit and reopen FIND950, then try again."
+    }
+}
+
 @MainActor
 final class Find950Model: ObservableObject {
     @Published private(set) var collection: S950LibraryCollection? {
@@ -238,8 +276,11 @@ final class Find950Model: ObservableObject {
     @Published private(set) var collectedEntryIDs: Set<String> {
         didSet { invalidateCollectionCache() }
     }
-    @Published var notice: BrowserNotice?
-    @Published private(set) var helperURL: URL?
+    @Published var notice: BrowserNotice? {
+        didSet {
+            if notice != nil, errorMessage != nil { errorMessage = nil }
+        }
+    }
     @Published private(set) var isScanning = false
     @Published private(set) var isWorking = false
     @Published private(set) var collectionExportStatus: String?
@@ -249,18 +290,29 @@ final class Find950Model: ObservableObject {
     @Published private(set) var hiddenFolderPaths: Set<String>
     @Published private(set) var libraryDataDirectoryURL: URL
     @Published private(set) var tagLibraryDirectoryURL: URL
-    @Published var errorMessage: String?
+    @Published private(set) var mediaVolumesByFolderPath: [String: FindMediaVolume] = [:]
+    @Published private(set) var ejectingMediaIDs: Set<String> = []
+    @Published var mediaCleanupPolicy = RemovableMediaCleanupPolicy() {
+        didSet { persistMediaCleanupPolicy() }
+    }
+    @Published var errorMessage: String? {
+        didSet {
+            if errorMessage != nil, notice != nil { notice = nil }
+        }
+    }
 
     weak var undoManager: UndoManager?
 
     private let defaultsKey = "FIND950.folderPaths"
     private let hiddenFoldersDefaultsKey = "FIND950.excludedSearchFolderPaths"
     private let collectionDefaultsKey = "FIND950.collectedEntryIDs"
+    private let mediaCleanupDefaultsKey = "FIND950.removableMediaCleanupPolicy"
     private let audition = SafeSampleAuditionController()
     private var edit950ApplicationURL: URL?
     private var indexCache: S950LibraryIndexDocument
     private var tagLibrary: SharedTagLibrary
     private var tagChangeObserver: NSObjectProtocol?
+    private var workspaceMediaObservers: [NSObjectProtocol] = []
     private var scanPending = false
     private var primarySelectedEntryID: String?
     private var entryLookup: [String: LibrarySearchResult] = [:]
@@ -287,11 +339,34 @@ final class Find950Model: ObservableObject {
         }
     }
 
-    var errorOffersHelperChoice: Bool {
-        errorMessage?.localizedCaseInsensitiveContains("AKAI Util") == true
+    var errorOffersFullDiskAccess: Bool {
+        errorMessage?.localizedCaseInsensitiveContains("Full Disk Access") == true
+    }
+
+    func dismissNotice() {
+        notice = nil
+    }
+
+    func dismissError() {
+        errorMessage = nil
+    }
+
+    func openFullDiskAccessSettings() {
+        guard let url = URL(
+            string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+        ) else { return }
+        NSWorkspace.shared.open(url)
     }
 
     init() {
+        if let data = UserDefaults.standard.data(
+            forKey: "FIND950.removableMediaCleanupPolicy"
+        ), let policy = try? JSONDecoder().decode(
+            RemovableMediaCleanupPolicy.self,
+            from: data
+        ) {
+            mediaCleanupPolicy = policy
+        }
         let initialDataDirectory = LibraryMetadataPersistence.directoryURL
         libraryDataDirectoryURL = initialDataDirectory
         let tagDirectory = SharedTagLibrary.resolvedDirectoryURL(
@@ -338,6 +413,7 @@ final class Find950Model: ObservableObject {
             return !hiddenFolderPaths.contains(folder.standardizedFileURL.path)
         }?.id
         errorMessage = tagLoadError
+        refreshMediaVolumes()
         audition.onPlaybackEnded = { [weak self] in self?.auditioningID = nil }
         tagChangeObserver = DistributedNotificationCenter.default().addObserver(
             forName: SharedTagLibrary.distributedChangeNotification,
@@ -347,6 +423,27 @@ final class Find950Model: ObservableObject {
             guard let model = self else { return }
             Task { @MainActor in model.reloadSharedTags() }
         }
+        let workspaceNotifications = NSWorkspace.shared.notificationCenter
+        workspaceMediaObservers.append(workspaceNotifications.addObserver(
+            forName: NSWorkspace.didMountNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.refreshMediaVolumes()
+                if !self.folderURLs.isEmpty { self.scanFolders() }
+            }
+        })
+        for name in [NSWorkspace.didUnmountNotification, NSWorkspace.didRenameVolumeNotification] {
+            workspaceMediaObservers.append(workspaceNotifications.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.refreshMediaVolumes() }
+            })
+        }
         rebuildEntryLookup()
         if !folderURLs.isEmpty { scanFolders() }
     }
@@ -354,6 +451,10 @@ final class Find950Model: ObservableObject {
     deinit {
         if let tagChangeObserver {
             DistributedNotificationCenter.default().removeObserver(tagChangeObserver)
+        }
+        let workspaceNotifications = NSWorkspace.shared.notificationCenter
+        for observer in workspaceMediaObservers {
+            workspaceNotifications.removeObserver(observer)
         }
     }
 
@@ -379,6 +480,261 @@ final class Find950Model: ObservableObject {
     }
     var visibleSampleCount: Int {
         visibleLibraryImages.reduce(0) { $0 + $1.sampleCount }
+    }
+
+    var ejectableMediaVolumes: [FindMediaVolume] {
+        let uniqueVolumes = Dictionary(
+            mediaVolumesByFolderPath.values.map { ($0.id, $0) },
+            uniquingKeysWith: { current, _ in current }
+        )
+        return uniqueVolumes.values
+            .filter { $0.isAvailable && $0.isEjectable }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    func mediaVolume(for folderURL: URL) -> FindMediaVolume? {
+        mediaVolumesByFolderPath[folderURL.standardizedFileURL.path]
+    }
+
+    func mediaVolume(for image: S950ImageCatalog) -> FindMediaVolume? {
+        if let folderURL = image.libraryFolderURL,
+           let media = mediaVolume(for: folderURL) {
+            return media
+        }
+        return mediaVolume(containing: image.imageURL)
+    }
+
+    func mediaStatus(for image: S950ImageCatalog) -> String {
+        if let media = mediaVolume(for: image) { return media.kindTitle }
+        return isImageAvailable(image) ? "LOCAL" : "MISSING"
+    }
+
+    func isImageAvailable(_ image: S950ImageCatalog) -> Bool {
+        FileManager.default.fileExists(atPath: image.imageURL.standardizedFileURL.path)
+    }
+
+    func canEject(_ media: FindMediaVolume) -> Bool {
+        media.isAvailable
+            && media.isEjectable
+            && !isScanning
+            && !isWorking
+            && !ejectingMediaIDs.contains(media.id)
+    }
+
+    func eject(_ media: FindMediaVolume) {
+        guard canEject(media) else {
+            if isScanning || isWorking {
+                errorMessage = "Wait for FIND950 to finish its current disk operation before ejecting \(media.name)."
+            } else if !media.isAvailable {
+                errorMessage = "\(media.name) is already offline."
+            } else {
+                errorMessage = "macOS does not report \(media.name) as ejectable."
+            }
+            return
+        }
+
+        audition.stop()
+        auditioningID = nil
+        ejectingMediaIDs.insert(media.id)
+        errorMessage = nil
+        Task {
+            var cleanupResult = RemovableMediaCleanupResult(
+                removedPaths: [],
+                failures: []
+            )
+            do {
+                let policy = mediaCleanupPolicy
+                let candidates = try await Task.detached(priority: .userInitiated) {
+                    try RemovableMediaCleaner.candidates(
+                        on: media.mountURL,
+                        policy: policy
+                    )
+                }.value
+
+                if !candidates.isEmpty {
+                    switch confirmCleanup(candidates, media: media) {
+                    case .cancel:
+                        ejectingMediaIDs.remove(media.id)
+                        return
+                    case .cleanAndEject:
+                        cleanupResult = try await Task.detached(priority: .userInitiated) {
+                            try RemovableMediaCleaner.remove(
+                                candidates,
+                                from: media.mountURL
+                            )
+                        }.value
+                    }
+                }
+
+                if !cleanupResult.failures.isEmpty {
+                    let detail = cleanupResult.failures.prefix(20).map {
+                        "\($0.relativePath): \($0.message)"
+                    }.joined(separator: "\n")
+                    throw FindSafeEjectCleanupError(
+                        mediaName: media.name,
+                        detail: detail
+                    )
+                }
+
+                let remaining = try await Task.detached(priority: .userInitiated) {
+                    try RemovableMediaCleaner.candidates(
+                        on: media.mountURL,
+                        policy: policy
+                    )
+                }.value
+                guard remaining.isEmpty else {
+                    let detail = remaining.prefix(20).map(\.relativePath)
+                        .joined(separator: "\n")
+                    throw FindSafeEjectCleanupError(
+                        mediaName: media.name,
+                        detail: "Still present after cleanup:\n\(detail)"
+                    )
+                }
+
+                try await nativeEject(media)
+                refreshMediaVolumes()
+                notice = BrowserNotice(
+                    title: cleanupResult.removedPaths.isEmpty
+                        ? "Media Verified and Ejected" : "Media Cleaned and Ejected",
+                    message: successfulEjectMessage(
+                        cleanupResult: cleanupResult,
+                        media: media
+                    )
+                )
+            } catch {
+                refreshMediaVolumes()
+                errorMessage = "Couldn’t cleanly eject \(media.name): \(error.localizedDescription)"
+            }
+            ejectingMediaIDs.remove(media.id)
+        }
+    }
+
+    private func successfulEjectMessage(
+        cleanupResult: RemovableMediaCleanupResult,
+        media: FindMediaVolume
+    ) -> String {
+        var details: [String] = []
+        if !cleanupResult.removedPaths.isEmpty {
+            details.append(
+                "Removed \(cleanupResult.removedPaths.count) configured metadata item(s)."
+            )
+        }
+        details.append("Verified that no configured metadata items remain.")
+        details.append(
+            "macOS cleanly unmounted and ejected \(media.name). Its cached catalogue remains searchable and will reconnect when the media returns."
+        )
+        return details.joined(separator: " ")
+    }
+
+    func setDefaultCleanupName(_ name: String, enabled: Bool) {
+        var policy = mediaCleanupPolicy
+        policy.setDefault(name, enabled: enabled)
+        mediaCleanupPolicy = policy
+    }
+
+    func addCustomCleanupName(_ name: String) -> Bool {
+        var policy = mediaCleanupPolicy
+        do {
+            try policy.addCustomName(name)
+            mediaCleanupPolicy = policy
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func removeCustomCleanupName(_ name: String) {
+        var policy = mediaCleanupPolicy
+        policy.customNames.removeAll {
+            $0.caseInsensitiveCompare(name) == .orderedSame
+        }
+        mediaCleanupPolicy = policy
+    }
+
+    func addCleanupException(_ exception: String) -> Bool {
+        var policy = mediaCleanupPolicy
+        do {
+            try policy.addException(exception)
+            mediaCleanupPolicy = policy
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func removeCleanupException(_ exception: String) {
+        var policy = mediaCleanupPolicy
+        policy.exceptions.removeAll {
+            $0.caseInsensitiveCompare(exception) == .orderedSame
+        }
+        mediaCleanupPolicy = policy
+    }
+
+    func resetMediaCleanupPolicy() {
+        mediaCleanupPolicy = RemovableMediaCleanupPolicy()
+    }
+
+    func refreshMediaVolumes() {
+        var refreshed: [String: FindMediaVolume] = [:]
+        for folderURL in folderURLs {
+            let path = folderURL.standardizedFileURL.path
+            if let mounted = FindMediaVolumeResolver.mountedVolume(containing: folderURL) {
+                refreshed[path] = mounted
+            } else if let previous = mediaVolumesByFolderPath[path] {
+                refreshed[path] = previous.withAvailability(false)
+            } else if let offline = FindMediaVolumeResolver.offlineVolumeHint(
+                containing: folderURL
+            ) {
+                refreshed[path] = offline
+            }
+        }
+        mediaVolumesByFolderPath = refreshed
+    }
+
+    private func mediaVolume(containing url: URL) -> FindMediaVolume? {
+        let path = url.standardizedFileURL.path
+        if let match = mediaVolumesByFolderPath
+            .sorted(by: { $0.key.count > $1.key.count })
+            .first(where: { path == $0.key || path.hasPrefix($0.key + "/") }) {
+            return match.value
+        }
+        return FindMediaVolumeResolver.mountedVolume(containing: url)
+            ?? FindMediaVolumeResolver.offlineVolumeHint(containing: url)
+    }
+
+    private enum CleanupEjectDecision {
+        case cleanAndEject
+        case cancel
+    }
+
+    private func confirmCleanup(
+        _ candidates: [RemovableMediaCleanupCandidate],
+        media: FindMediaVolume
+    ) -> CleanupEjectDecision {
+        let preview = candidates.prefix(8).map { "• \($0.relativePath)" }
+            .joined(separator: "\n")
+        let remaining = candidates.count - min(8, candidates.count)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Clean \(media.name) before ejecting?"
+        alert.informativeText = "FIND950 found \(candidates.count) configured metadata item(s) to remove:\n\n"
+            + preview
+            + (remaining > 0 ? "\n• …and \(remaining) more" : "")
+            + "\n\nFIND950 will verify that every configured item is gone before ejecting. Exceptions and custom cleanup names can be changed in Settings."
+        alert.addButton(withTitle: "Clean & Eject")
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .cleanAndEject
+        default: return .cancel
+        }
+    }
+
+    private func nativeEject(_ media: FindMediaVolume) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            try NSWorkspace.shared.unmountAndEjectDevice(at: media.mountURL)
+        }.value
     }
 
     var librarySearchResults: [LibrarySearchResult] {
@@ -667,6 +1023,7 @@ final class Find950Model: ObservableObject {
         folderURLs.append(contentsOf: panel.urls.map(\.standardizedFileURL).filter { known.insert($0).inserted })
         folderURLs.sort { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
         persistFolders()
+        refreshMediaVolumes()
         scanFolders()
     }
 
@@ -679,6 +1036,7 @@ final class Find950Model: ObservableObject {
         hiddenFolderPaths.remove(url.standardizedFileURL.path)
         UserDefaults.standard.set(Array(hiddenFolderPaths).sorted(), forKey: hiddenFoldersDefaultsKey)
         persistFolders()
+        refreshMediaVolumes()
         scanFolders()
         if let index {
             undoManager?.registerSuiteUndo(
@@ -688,18 +1046,6 @@ final class Find950Model: ObservableObject {
                 target.restoreFolder(url, at: index, hidden: wasHidden)
             }
         }
-    }
-
-    func chooseHelper() {
-        let panel = NSOpenPanel()
-        panel.title = "Locate AKAI Util"
-        panel.prompt = "Use Helper"
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        helperURL = url
-        scanFolders()
     }
 
     func chooseLibraryDataDirectory() {
@@ -775,8 +1121,7 @@ final class Find950Model: ObservableObject {
         }
         let helper: URL
         do {
-            helper = try helperURL ?? AkaiUtilLocator.locate()
-            helperURL = helper
+            helper = try BundledAkaiUtil.locate()
         } catch {
             errorMessage = error.localizedDescription
             return
@@ -799,6 +1144,7 @@ final class Find950Model: ObservableObject {
             if requestedFolders == folderURLs {
                 indexCache = update.index
                 collection = update.collection
+                refreshMediaVolumes()
                 if !images.contains(where: {
                     $0.id == selectedImageID
                 }) {
@@ -809,9 +1155,12 @@ final class Find950Model: ObservableObject {
                 } catch {
                     errorMessage = "Couldn’t save the IMG index cache: \(error.localizedDescription)"
                 }
-                if !update.collection.failures.isEmpty {
+                let actionableFailures = update.collection.failures.filter {
+                    mediaVolume(containing: $0.imageURL)?.isAvailable != false
+                }
+                if !actionableFailures.isEmpty {
                     errorMessage = "Some images could not be read:\n"
-                        + update.collection.failures.prefix(5)
+                        + actionableFailures.prefix(5)
                         .map { "\($0.imageURL.lastPathComponent): \($0.message)" }
                         .joined(separator: "\n")
                 }
@@ -841,6 +1190,7 @@ final class Find950Model: ObservableObject {
         volume: S950VolumeCatalog,
         sample: S950LibraryEntry
     ) {
+        guard requireAvailable(image, action: "export \(sample.name)") else { return }
         let panel = NSSavePanel()
         panel.title = "Export Sample as WAV"
         panel.prompt = "Export"
@@ -848,8 +1198,11 @@ final class Find950Model: ObservableObject {
         panel.allowedContentTypes = [.wav]
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let destination = panel.url else { return }
-        guard let helperURL else {
-            errorMessage = S950LibraryError.helperNotFound.localizedDescription
+        let helperURL: URL
+        do {
+            helperURL = try BundledAkaiUtil.locate()
+        } catch {
+            errorMessage = error.localizedDescription
             return
         }
         isWorking = true
@@ -887,6 +1240,7 @@ final class Find950Model: ObservableObject {
             auditioningID = nil
             return
         }
+        guard requireAvailable(image, action: "audition \(sample.name)") else { return }
         audition.stop()
         auditioningID = id
         errorMessage = nil
@@ -894,7 +1248,7 @@ final class Find950Model: ObservableObject {
             let workspace = URL(fileURLWithPath: "/tmp", isDirectory: true)
                 .appendingPathComponent("s950-audition-\(UUID().uuidString)", isDirectory: true)
             do {
-                guard let helperURL else { throw S950LibraryError.helperNotFound }
+                let helperURL = try BundledAkaiUtil.locate()
                 let wavURL = try await S950LibraryScanner(helperURL: helperURL).exportSampleForAudition(
                     imageURL: image.imageURL,
                     volumePath: volume.path,
@@ -919,6 +1273,7 @@ final class Find950Model: ObservableObject {
     }
 
     func openInEDIT950(_ image: S950ImageCatalog) {
+        guard requireAvailable(image, action: "open \(image.name)") else { return }
         do {
             let application = try locateEDIT950Application()
             let configuration = NSWorkspace.OpenConfiguration()
@@ -943,6 +1298,9 @@ final class Find950Model: ObservableObject {
         image: S950ImageCatalog,
         program: S950LibraryEntry
     ) {
+        guard requireAvailable(image, action: "open \(program.name) in PLAY950") else {
+            return
+        }
         DistributedNotificationCenter.default().postNotificationName(
             Notification.Name("com.e45recordings.PLAY950.LoadContent"),
             object: nil,
@@ -974,6 +1332,7 @@ final class Find950Model: ObservableObject {
         program: S950LibraryEntry,
         exportMode: String = "image"
     ) {
+        guard requireAvailable(image, action: "export \(program.name)") else { return }
         isWorking = true
         errorMessage = nil
         Task {
@@ -1054,6 +1413,14 @@ final class Find950Model: ObservableObject {
         let manifest = collectionManifest
         guard manifest.exportBlockers.isEmpty else {
             errorMessage = manifest.exportBlockers.joined(separator: "\n\n")
+            return
+        }
+        let offlineImages = Set(manifest.exportEntries.compactMap {
+            isImageAvailable($0.image) ? nil : $0.image.name
+        }).sorted()
+        guard offlineImages.isEmpty else {
+            errorMessage = "Reconnect this media before exporting the collection: "
+                + offlineImages.joined(separator: ", ")
             return
         }
         let selections = manifest.exportEntries.map {
@@ -1167,6 +1534,18 @@ final class Find950Model: ObservableObject {
 
     private func auditionID(image: S950ImageCatalog, volume: S950VolumeCatalog, sample: S950LibraryEntry) -> String {
         "\(image.imageURL.path)|\(volume.path)|\(sample.id)"
+    }
+
+    private func requireAvailable(
+        _ image: S950ImageCatalog,
+        action: String
+    ) -> Bool {
+        guard isImageAvailable(image) else {
+            let mediaName = mediaVolume(for: image)?.name
+            errorMessage = "Reconnect \(mediaName.map { "\($0) " } ?? "")to \(action). The cached catalogue remains available for browsing and search."
+            return false
+        }
+        return true
     }
 
     private func itemHasSelectedTag(
@@ -1365,6 +1744,11 @@ final class Find950Model: ObservableObject {
         UserDefaults.standard.set(Array(collectedEntryIDs).sorted(), forKey: collectionDefaultsKey)
     }
 
+    private func persistMediaCleanupPolicy() {
+        guard let data = try? JSONEncoder().encode(mediaCleanupPolicy) else { return }
+        UserDefaults.standard.set(data, forKey: mediaCleanupDefaultsKey)
+    }
+
     private func invalidateCollectionCache() {
         cachedCollectedEntries = nil
         cachedCollectionManifest = nil
@@ -1492,6 +1876,8 @@ private enum BrowserErrorAudio: LocalizedError {
 private struct LibrarySettingsView: View {
     @ObservedObject var model: Find950Model
     @EnvironmentObject private var preferences: SuitePreferences
+    @State private var customCleanupName = ""
+    @State private var cleanupException = ""
 
     var body: some View {
         Form {
@@ -1508,6 +1894,97 @@ private struct LibrarySettingsView: View {
                 .pickerStyle(.segmented)
                 Toggle("SHOW FOLDERS SIDEBAR", isOn: $preferences.sidebarVisible)
                 Toggle("SHOW INSPECTOR", isOn: $preferences.inspectorVisible)
+                Toggle("SHOW COLLECTION PANE", isOn: $preferences.collectionVisible)
+            }
+            Section("INCLUDED COMPONENTS") {
+                LabeledContent("AKAI Util", value: "4.6.7 · Universal")
+                Text("AKAI Util is included with FIND950 and is used read-only to inspect IMG files and prepare temporary audition audio. No separate download, path selection or Terminal setup is required. Safe Eject is handled by native FIND950 code.")
+                    .font(SuiteFont.regular(10))
+                    .foregroundStyle(Color.suiteUnit)
+            }
+            Section("CLEAN EJECT") {
+                Text("FIND950 applies the enabled metadata rules, including AppleDouble ._* sidecars, and verifies that every match is gone before ejecting. Full Disk Access is required to remove protected .Spotlight-V100 data.")
+                    .font(SuiteFont.regular(10))
+                    .foregroundStyle(Color.suiteUnit)
+                Button("Open Full Disk Access Settings") {
+                    model.openFullDiskAccessSettings()
+                }
+                Text("Default metadata rules")
+                    .font(SuiteFont.medium(11))
+                LazyVGrid(
+                    columns: [GridItem(.flexible()), GridItem(.flexible())],
+                    alignment: .leading,
+                    spacing: 7
+                ) {
+                    ForEach(RemovableMediaCleanupPolicy.defaultNames, id: \.self) { name in
+                        Toggle(name, isOn: Binding(
+                            get: { model.mediaCleanupPolicy.isDefaultEnabled(name) },
+                            set: { model.setDefaultCleanupName(name, enabled: $0) }
+                        ))
+                        .toggleStyle(.checkbox)
+                    }
+                }
+
+                LabeledContent("Custom exact names") {
+                    VStack(alignment: .trailing, spacing: 7) {
+                        ForEach(model.mediaCleanupPolicy.customNames, id: \.self) { name in
+                            HStack {
+                                Text(name).textSelection(.enabled)
+                                Button {
+                                    model.removeCustomCleanupName(name)
+                                } label: {
+                                    Image(systemName: "minus.circle")
+                                }
+                                .buttonStyle(.plain)
+                                .help("REMOVE CUSTOM CLEANUP NAME")
+                            }
+                        }
+                        HStack {
+                            TextField("e.g. .MySamplerCache", text: $customCleanupName)
+                                .textFieldStyle(.roundedBorder)
+                                .onSubmit(addCustomCleanupName)
+                            Button("Add") { addCustomCleanupName() }
+                                .disabled(customCleanupName.trimmingCharacters(
+                                    in: .whitespacesAndNewlines
+                                ).isEmpty)
+                        }
+                    }
+                    .frame(maxWidth: 390, alignment: .trailing)
+                }
+
+                LabeledContent("Exceptions") {
+                    VStack(alignment: .trailing, spacing: 7) {
+                        ForEach(model.mediaCleanupPolicy.exceptions, id: \.self) { exception in
+                            HStack {
+                                Text(exception).textSelection(.enabled)
+                                Button {
+                                    model.removeCleanupException(exception)
+                                } label: {
+                                    Image(systemName: "minus.circle")
+                                }
+                                .buttonStyle(.plain)
+                                .help("REMOVE CLEANUP EXCEPTION")
+                            }
+                        }
+                        HStack {
+                            TextField("name or relative/path", text: $cleanupException)
+                                .textFieldStyle(.roundedBorder)
+                                .onSubmit(addCleanupException)
+                            Button("Add") { addCleanupException() }
+                                .disabled(cleanupException.trimmingCharacters(
+                                    in: .whitespacesAndNewlines
+                                ).isEmpty)
+                        }
+                    }
+                    .frame(maxWidth: 390, alignment: .trailing)
+                }
+                HStack {
+                    Text("Exact names match at any depth. An exception can be a leaf name everywhere or one path relative to the media root. FIND950 always previews matches before deleting.")
+                        .font(SuiteFont.regular(10))
+                        .foregroundStyle(Color.suiteUnit)
+                    Spacer()
+                    Button("Reset Defaults") { model.resetMediaCleanupPolicy() }
+                }
             }
             Section("Library Cache") {
                 LabeledContent("Cached library data") {
@@ -1560,7 +2037,15 @@ private struct LibrarySettingsView: View {
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
         .background(Color.suiteBackground)
-        .frame(width: 620, height: 430)
+        .frame(width: 720, height: 680)
         .navigationTitle("Settings")
+    }
+
+    private func addCustomCleanupName() {
+        if model.addCustomCleanupName(customCleanupName) { customCleanupName = "" }
+    }
+
+    private func addCleanupException() {
+        if model.addCleanupException(cleanupException) { cleanupException = "" }
     }
 }

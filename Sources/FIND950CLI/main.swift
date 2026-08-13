@@ -73,9 +73,38 @@ struct S950LibraryCommand {
         Usage:
           find950-cli <folder> [--recursive] [--json] [--akaiutil <path>]
 
-        AKAI Util is discovered from --akaiutil, AKAIUTIL_PATH, EDIT950
-        in /Applications, or PATH. Images are always opened read-only.
+        AKAI Util is discovered from --akaiutil, AKAIUTIL_PATH, or PATH.
+        Images are always opened read-only.
         """)
+    }
+}
+
+private enum AkaiUtilLocator {
+    static func locate(explicitPath: String? = nil) throws -> URL {
+        var candidates: [String] = []
+        if let explicitPath { candidates.append(explicitPath) }
+        if let environment = ProcessInfo.processInfo.environment["AKAIUTIL_PATH"] {
+            candidates.append(environment)
+        }
+        if let path = executableOnPath(named: "akaiutil") {
+            candidates.append(path)
+        }
+        guard let match = candidates.first(where: {
+            FileManager.default.isExecutableFile(atPath: $0)
+        }) else {
+            throw S950LibraryError.helperNotFound
+        }
+        return URL(fileURLWithPath: match)
+    }
+
+    private static func executableOnPath(named name: String) -> String? {
+        for directory in ProcessInfo.processInfo.environment["PATH", default: ""]
+            .split(separator: ":") {
+            let path = URL(fileURLWithPath: String(directory))
+                .appendingPathComponent(name).path
+            if FileManager.default.isExecutableFile(atPath: path) { return path }
+        }
+        return nil
     }
 }
 

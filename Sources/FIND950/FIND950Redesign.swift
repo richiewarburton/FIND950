@@ -25,24 +25,7 @@ struct Find950View: View {
             VStack(spacing: 0) {
                 SuiteBrandHeader(product: "FIND950", purpose: "BROWSE · SEARCH · COLLECT")
                 searchStrip
-                VSplitView {
-                    HSplitView {
-                        if preferences.sidebarVisible {
-                            FindSidebar(model: model)
-                                .frame(minWidth: 200, idealWidth: 260, maxWidth: 360)
-                        }
-                        content
-                            .frame(minWidth: 280)
-                        if preferences.inspectorVisible {
-                            FindInspector(model: model)
-                                .frame(minWidth: 280, idealWidth: 320, maxWidth: 420)
-                        }
-                    }
-                    .frame(minHeight: 210)
-
-                    FindCollection(model: model)
-                        .frame(minHeight: 220, idealHeight: 290, maxHeight: 460)
-                }
+                browserLayout
                 FindStatusBar(model: model)
             }
             .task(id: geometry.size.width) {
@@ -58,17 +41,28 @@ struct Find950View: View {
         .toolbar { toolbar }
         .alert("FIND950", isPresented: Binding(
             get: { model.errorMessage != nil },
-            set: { if !$0 { model.errorMessage = nil } }
+            set: { if !$0 { model.dismissError() } }
         )) {
-            if model.errorOffersHelperChoice {
-                Button("CHOOSE AKAI UTIL…") { model.chooseHelper() }
+            if model.errorOffersFullDiskAccess {
+                Button("OPEN FULL DISK ACCESS") {
+                    model.dismissError()
+                    model.openFullDiskAccessSettings()
+                }
             }
-            Button("OK", role: .cancel) {}
+            Button("OK", role: .cancel) { model.dismissError() }
         } message: {
             Text(model.errorMessage ?? "Unknown error")
         }
-        .alert(item: $model.notice) { notice in
-            Alert(title: Text(notice.title), message: Text(notice.message), dismissButton: .default(Text("OK")))
+        .alert(
+            model.notice?.title ?? "FIND950",
+            isPresented: Binding(
+                get: { model.notice != nil },
+                set: { if !$0 { model.dismissNotice() } }
+            )
+        ) {
+            Button("OK", role: .cancel) { model.dismissNotice() }
+        } message: {
+            Text(model.notice?.message ?? "")
         }
         .sheet(isPresented: $model.showTagManager) {
             FindTagManager(model: model)
@@ -81,12 +75,42 @@ struct Find950View: View {
         .onChange(of: model.searchFocusRequest) { _, _ in searchFocused = true }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.reloadSharedTags()
+            model.refreshMediaVolumes()
         }
         .background(
             FindSpaceKeyMonitor {
                 model.handleSpaceForSelectedEntry()
             }
         )
+    }
+
+    @ViewBuilder
+    private var browserLayout: some View {
+        if preferences.collectionVisible {
+            VSplitView {
+                browserPanes
+                FindCollection(model: model)
+                    .frame(minHeight: 220, idealHeight: 290, maxHeight: 460)
+            }
+        } else {
+            browserPanes
+        }
+    }
+
+    private var browserPanes: some View {
+        HSplitView {
+            if preferences.sidebarVisible {
+                FindSidebar(model: model)
+                    .frame(minWidth: 200, idealWidth: 260, maxWidth: 360)
+            }
+            content
+                .frame(minWidth: 280)
+            if preferences.inspectorVisible {
+                FindInspector(model: model)
+                    .frame(minWidth: 280, idealWidth: 320, maxWidth: 420)
+            }
+        }
+        .frame(minHeight: 210)
     }
 
     @ViewBuilder
@@ -126,8 +150,9 @@ struct Find950View: View {
     private var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
             FindToolbarButton(
-                title: "FOLDERS",
-                symbol: "sidebar.left"
+                title: preferences.sidebarVisible ? "HIDE FOLDERS" : "SHOW FOLDERS",
+                symbol: "sidebar.left",
+                isSelected: preferences.sidebarVisible
             ) { preferences.sidebarVisible.toggle() }
             if isCompact && !preferences.sidebarVisible {
                 Menu {
@@ -144,10 +169,17 @@ struct Find950View: View {
             FindToolbarButton(title: "ADD FOLDERS", symbol: "folder.badge.plus", action: model.addFolders)
         }
         ToolbarItemGroup(placement: .primaryAction) {
+            FindEjectMenu(model: model)
             FindToolbarButton(title: "TAGS", symbol: "tag") { model.showTagManager = true }
             FindToolbarButton(
-                title: "INSPECTOR",
-                symbol: preferences.inspectorVisible ? "sidebar.right" : "sidebar.right"
+                title: preferences.collectionVisible ? "HIDE COLLECTION" : "SHOW COLLECTION",
+                symbol: "tray.full",
+                isSelected: preferences.collectionVisible
+            ) { preferences.collectionVisible.toggle() }
+            FindToolbarButton(
+                title: preferences.inspectorVisible ? "HIDE INSPECTOR" : "SHOW INSPECTOR",
+                symbol: "sidebar.right",
+                isSelected: preferences.inspectorVisible
             ) { preferences.inspectorVisible.toggle() }
         }
     }
@@ -305,6 +337,7 @@ private struct FindSearchScopeMenu: View {
 private struct FindToolbarButton: View {
     let title: String
     let symbol: String
+    var isSelected: Bool? = nil
     let action: () -> Void
     @State private var hovering = false
 
@@ -316,12 +349,59 @@ private struct FindToolbarButton: View {
                 .foregroundStyle(Color.suiteInk)
                 .padding(.horizontal, 8)
                 .frame(minHeight: 30)
-                .background(hovering ? Color.suiteSlab2 : Color.suiteSlab)
+                .background(buttonBackground)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(isSelected == true ? Color.suiteYellow : Color.clear)
+                )
                 .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help(title.uppercased())
+    }
+
+    private var buttonBackground: Color {
+        if hovering { return Color.suiteSlab2 }
+        if isSelected == true { return Color.suiteYellow.opacity(0.2) }
+        return Color.suiteSlab
+    }
+}
+
+private struct FindEjectMenu: View {
+    @ObservedObject var model: Find950Model
+
+    var body: some View {
+        Menu {
+            if model.ejectableMediaVolumes.isEmpty {
+                Button("NO EJECTABLE MEDIA") {}
+                    .disabled(true)
+            } else {
+                ForEach(model.ejectableMediaVolumes) { media in
+                    Button {
+                        model.eject(media)
+                    } label: {
+                        Label(
+                            model.ejectingMediaIDs.contains(media.id)
+                                ? "EJECTING \(media.name.uppercased())…"
+                                : "CLEAN & EJECT \(media.name.uppercased())",
+                            systemImage: "eject"
+                        )
+                    }
+                    .disabled(!model.canEject(media))
+                }
+            }
+        } label: {
+            SuiteMenuLabel(
+                title: "SAFE EJECT",
+                systemImage: "eject",
+                badge: model.ejectableMediaVolumes.isEmpty
+                    ? nil : model.ejectableMediaVolumes.count
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .disabled(model.ejectableMediaVolumes.isEmpty)
+        .help("CLEANLY UNMOUNT AND EJECT REMOVABLE MEDIA")
     }
 }
 
@@ -369,12 +449,35 @@ private struct FindSidebar: View {
                                         .foregroundStyle(model.isFolderVisible(folder) ? Color.suiteInk : Color.suiteUnit)
                                     Text(folder.lastPathComponent).lineLimit(1)
                                     Spacer()
+                                    if let media = model.mediaVolume(for: folder) {
+                                        Image(systemName: media.isAvailable
+                                            ? "externaldrive.fill" : "externaldrive.badge.xmark")
+                                            .foregroundStyle(media.isAvailable
+                                                ? Color.suiteBlue : Color.suiteUnit)
+                                            .help(media.statusTitle)
+                                    }
                                     Text(folderDiskCount(folder).formatted())
                                         .font(SuiteFont.regular(10)).foregroundStyle(Color.suiteUnit).monospacedDigit()
                                 }
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            if let media = model.mediaVolume(for: folder), media.isEjectable {
+                                Button {
+                                    model.eject(media)
+                                } label: {
+                                    Image(systemName: "eject.fill")
+                                        .font(SuiteFont.medium(11))
+                                        .foregroundStyle(Color.suiteInk)
+                                        .frame(width: 28, height: 26)
+                                        .background(Color.suiteSlab2)
+                                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.suiteRule2))
+                                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(!model.canEject(media))
+                                .help("CLEAN & EJECT \(media.name.uppercased())")
+                            }
                             Button(role: .destructive) {
                                 model.removeFolder(folder)
                             } label: {
@@ -393,6 +496,14 @@ private struct FindSidebar: View {
                         .contentShape(Rectangle())
                         .contextMenu {
                             Button("SHOW IN FINDER") { model.showInFinder(folder) }
+                            if let media = model.mediaVolume(for: folder), media.isEjectable {
+                                Button {
+                                    model.eject(media)
+                                } label: {
+                                    Label("CLEAN & EJECT \(media.name.uppercased())", systemImage: "eject")
+                                }
+                                .disabled(!model.canEject(media))
+                            }
                             Divider()
                             Button("REMOVE FOLDER", role: .destructive) { model.removeFolder(folder) }
                         }
@@ -407,8 +518,16 @@ private struct FindSidebar: View {
                         } label: {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(image.name).font(SuiteFont.medium(12)).lineLimit(1)
-                                Text("\(image.programCount) \(image.programCount == 1 ? "PROGRAM" : "PROGRAMS") · \(image.sampleCount) \(image.sampleCount == 1 ? "SAMPLE" : "SAMPLES")")
-                                    .font(SuiteFont.regular(10)).tracking(1.1).foregroundStyle(Color.suiteUnit).monospacedDigit()
+                                HStack(spacing: 7) {
+                                    Text("\(image.programCount) \(image.programCount == 1 ? "PROGRAM" : "PROGRAMS") · \(image.sampleCount) \(image.sampleCount == 1 ? "SAMPLE" : "SAMPLES")")
+                                        .font(SuiteFont.regular(10)).tracking(1.1).foregroundStyle(Color.suiteUnit).monospacedDigit()
+                                    if model.mediaStatus(for: image) != "LOCAL" {
+                                        FindMediaBadge(
+                                            title: model.mediaStatus(for: image),
+                                            available: model.isImageAvailable(image)
+                                        )
+                                    }
+                                }
                                 FindTagChips(tags: model.tagsFor(image: image), limit: 2)
                             }
                             .foregroundStyle(Color.suiteInk)
@@ -427,6 +546,15 @@ private struct FindSidebar: View {
                             }
                             Button("SHOW IN FINDER") { model.showInFinder(image.imageURL) }
                             Button("RESCAN THIS IMAGE") { model.rescanImage(image) }
+                            if let media = model.mediaVolume(for: image), media.isEjectable {
+                                Divider()
+                                Button {
+                                    model.eject(media)
+                                } label: {
+                                    Label("CLEAN & EJECT \(media.name.uppercased())", systemImage: "eject")
+                                }
+                                .disabled(!model.canEject(media))
+                            }
                         }
                     }
                 }
@@ -438,6 +566,21 @@ private struct FindSidebar: View {
 
     private func folderDiskCount(_ folder: URL) -> Int {
         model.allImages.filter { $0.libraryFolderURL?.standardizedFileURL == folder.standardizedFileURL }.count
+    }
+}
+
+private struct FindMediaBadge: View {
+    let title: String
+    let available: Bool
+
+    var body: some View {
+        Text(title)
+            .font(SuiteFont.medium(8))
+            .tracking(0.8)
+            .foregroundStyle(available ? Color.suiteBlue : Color.suiteUnit)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(Color.suiteSlab2, in: RoundedRectangle(cornerRadius: 3))
     }
 }
 
@@ -522,6 +665,21 @@ private struct FindContentHeader: View {
                 Text(image.imageURL.path).font(SuiteFont.regular(10)).foregroundStyle(Color.suiteUnit).lineLimit(1).truncationMode(.head)
             }
             Spacer()
+            if model.mediaStatus(for: image) != "LOCAL" {
+                FindMediaBadge(
+                    title: model.mediaStatus(for: image),
+                    available: model.isImageAvailable(image)
+                )
+            }
+            if let media = model.mediaVolume(for: image), media.isEjectable {
+                Button {
+                    model.eject(media)
+                } label: {
+                    Label("CLEAN EJECT", systemImage: "eject")
+                }
+                .buttonStyle(SuiteSecondaryButtonStyle())
+                .disabled(!model.canEject(media))
+            }
             Menu { ImageTagMenu(model: model, image: image) } label: {
                 SuiteMenuLabel(title: "TAGS", systemImage: "tag")
             }.menuStyle(.borderlessButton)
@@ -608,6 +766,9 @@ private struct FindInspector: View {
             inspectorSection("ACTIONS") { entryActions(context) }
             inspectorSection("LOCATION") {
                 Text("\(context.image.name) · \(context.volume.name)").foregroundStyle(Color.suiteUnit)
+                if let media = model.mediaVolume(for: context.image) {
+                    metadataRow("MEDIA", media.statusTitle.uppercased())
+                }
                 Button("SHOW IN FINDER") { model.showInFinder(context.image.imageURL) }.buttonStyle(SuiteSecondaryButtonStyle())
             }
         }
@@ -649,7 +810,12 @@ private struct FindInspector: View {
                 Image(systemName: "externaldrive").font(SuiteFont.regular(20)).foregroundStyle(Color.suiteUnit)
                 VStack(alignment: .leading, spacing: 4) { Text(image.imageURL.lastPathComponent).font(SuiteFont.regular(12)); Text("DISK IMAGE").font(SuiteFont.regular(10)).foregroundStyle(Color.suiteUnit) }
             }
-            inspectorSection("METADATA") { metadataRow("PROGRAMS", image.programCount.formatted()); metadataRow("SAMPLES", image.sampleCount.formatted()); metadataRow("VOLUMES", image.volumes.count.formatted()) }
+            inspectorSection("METADATA") {
+                metadataRow("PROGRAMS", image.programCount.formatted())
+                metadataRow("SAMPLES", image.sampleCount.formatted())
+                metadataRow("VOLUMES", image.volumes.count.formatted())
+                metadataRow("MEDIA", model.mediaStatus(for: image))
+            }
             inspectorSection("TAGS") { FindTagChips(tags: model.tagsFor(image: image), limit: 6) }
             inspectorSection("ACTIONS") {
                 VStack(alignment: .leading, spacing: 8) {
@@ -659,6 +825,15 @@ private struct FindInspector: View {
                     }.buttonStyle(SuiteSecondaryButtonStyle())
                     Button("SHOW IN FINDER") { model.showInFinder(image.imageURL) }.buttonStyle(SuiteSecondaryButtonStyle())
                     Button("RESCAN THIS IMAGE") { model.rescanImage(image) }.buttonStyle(SuiteSecondaryButtonStyle())
+                    if let media = model.mediaVolume(for: image), media.isEjectable {
+                        Button {
+                            model.eject(media)
+                        } label: {
+                            Label("CLEAN & EJECT \(media.name.uppercased())", systemImage: "eject")
+                        }
+                        .buttonStyle(SuiteSecondaryButtonStyle())
+                        .disabled(!model.canEject(media))
+                    }
                 }
             }
             inspectorSection("LOCATION") { Text(image.imageURL.path).font(SuiteFont.regular(10)).foregroundStyle(Color.suiteUnit).textSelection(.enabled) }
@@ -756,7 +931,12 @@ private struct FindTagManager: View {
                 }.scrollContentBackground(.hidden).background(Color.suiteBackground)
             }
             Text("Tags are shared with EDIT950 and are never written into IMG, P9 or S9 files.").font(SuiteFont.regular(10)).foregroundStyle(Color.suiteUnit)
-            HStack { Spacer(); Button("DONE") { dismiss() }.buttonStyle(SuitePrimaryButtonStyle(role: .neutral)) }
+            HStack {
+                Spacer()
+                Button("DONE") { dismiss() }
+                    .buttonStyle(SuitePrimaryButtonStyle(role: .neutral))
+                    .keyboardShortcut(.defaultAction)
+            }
         }.padding(24).frame(minWidth: 620, minHeight: 420).background(Color.suitePanel)
     }
 }
@@ -920,7 +1100,18 @@ private struct FindRelatedPrograms: View {
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack { VStack(alignment: .leading) { Text("PROGRAMS USING \(context.sample.name)").font(SuiteFont.medium(15)).tracking(2.4); Text("\(context.image.name) · \(context.volume.name)").foregroundStyle(Color.suiteUnit) }; Spacer(); Button("DONE") { dismiss() }.buttonStyle(SuiteSecondaryButtonStyle()) }
+            HStack {
+                VStack(alignment: .leading) {
+                    Text("PROGRAMS USING \(context.sample.name)")
+                        .font(SuiteFont.medium(15)).tracking(2.4)
+                    Text("\(context.image.name) · \(context.volume.name)")
+                        .foregroundStyle(Color.suiteUnit)
+                }
+                Spacer()
+                Button("DONE") { dismiss() }
+                    .buttonStyle(SuiteSecondaryButtonStyle())
+                    .keyboardShortcut(.defaultAction)
+            }
             if context.programs.isEmpty { SuiteEmptyState(systemImage: "arrow.triangle.branch", title: "NO REFERENCING PROGRAMS FOUND", message: "The sample may be unused, or the program format may not expose a matching sample name.", actionTitle: nil, action: nil) }
             else {
                 List(context.programs) { program in

@@ -25,16 +25,14 @@ FIND950 indexes that folder and lets you:
   colour-coded tags as EDIT950;
 - find every P9 program on a disk that refers to a particular S9 sample;
 - collect any exact set of P9 and S9 files into a new verified IMG;
+- safely eject attached library media after previewed metadata cleanup;
 - open the exact disk in EDIT950 for editing; and
 - send the exact program towards PLAY950 for use in a DAW.
 
 The source images are opened **read-only**. Scanning, searching, tagging and
 auditioning cannot alter your archive. You do not need the original sampler.
 
-Current public release:
-**[0.2.3 (build 5)](https://github.com/richiewarburton/FIND950/releases/tag/v0.2.3)**.
-The Universal macOS app supports Apple Silicon and Intel and requires macOS 14
-or later.
+Current version: **0.2.4 (build 6)**. Requires macOS 14 or later.
 
 ![FIND950 searching a multi-folder IMG library](docs/images/find950-library.png)
 
@@ -79,6 +77,16 @@ The decoded catalogue is cached. On later launches, results appear immediately
 while a background pass checks paths, sizes and modification times. Only new or
 changed images are reopened by AKAI Util.
 
+## Included AKAI Util helper
+
+AKAI Util 4.6.7 is included with FIND950. No separate download, EDIT950
+installation, path selection, `chmod` command or other Terminal setup is
+required. FIND950 launches the included Universal helper locally and strictly
+read-only to inspect IMG files and prepare temporary audition audio.
+
+Safe Eject and removable-media metadata cleanup are handled separately by
+native FIND950 code; they do not use AKAI Util.
+
 ## What is preserved
 
 This is more than a filename search. Programs are indexed with their native
@@ -109,21 +117,11 @@ cd FIND950
 That installs **FIND950.app** in `/Applications`, so it can be
 opened from Finder, Spotlight, the Dock or PLAY950 without a Terminal window.
 
-The browser uses AKAI Util for read-only decoding. The easiest setup is to
-install [EDIT950](https://github.com/richiewarburton/EDIT950)
-first; FIND950 finds EDIT950's bundled Universal helper automatically. An
-alternative AKAI Util executable can be selected in settings.
-
-Developers can instead run:
-
-```sh
-swift run "FIND950"
-```
-
 There is also a command-line catalogue view:
 
 ```sh
-swift run find950-cli "/path/to/your/IMG folder" --recursive
+swift run find950-cli "/path/to/your/IMG folder" --recursive \
+    --akaiutil /path/to/akaiutil
 ```
 
 ## From finding a sound to using it
@@ -138,9 +136,6 @@ FIND950 is the discovery part of the
 | [PLAY950](https://github.com/richiewarburton/PLAY950) | Play native programs in a DAW and recall them with the project. |
 
 > **Find in FIND950, modify in EDIT950, play and recall in PLAY950.**
-
-The public Universal PLAY950 VST3 is available from its
-[GitHub Releases page](https://github.com/richiewarburton/PLAY950/releases/latest).
 
 When you choose **Export Program to IMG…**, FIND950 sends EDIT950 the exact
 source IMG, volume, P9 identity, source fingerprint and a read-only preview of
@@ -166,6 +161,9 @@ FIND950's AKAI Util session is structurally read-only:
   rejected;
 - source fingerprints are calculated before an EDIT950 handoff;
 - temporary audition files live outside the archive; and
+- Safe Eject previews configured metadata cleanup, verifies that no configured
+  item remains, and leaves the media mounted if deletion or verification fails;
+  Full Disk Access is required for protected `.Spotlight-V100` data; and
 - destination selection and every IMG mutation belong to EDIT950.
 
 Keep an independent archival backup anyway—especially when the IMG files are
@@ -205,4 +203,6 @@ Akai Professional. “Akai” and “S950” are trademarks of their respective 
 
 The repository is licensed under the [MIT License](LICENSE). Third-party tools,
 sample libraries, disk images, trademarks and documentation retain their own
-licences and terms.
+licences and terms. AKAI Util is GPL-2.0-or-later; its exact corresponding
+source, licence and provenance are included under `ThirdParty/akaiutil-4.6.7`
+and in packaged releases.

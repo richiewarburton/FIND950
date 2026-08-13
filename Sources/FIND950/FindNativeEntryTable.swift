@@ -87,6 +87,8 @@ struct FindNativeEntryTable: NSViewRepresentable {
         private struct RowRenderKey: Equatable {
             let id: String
             let diskName: String
+            let mediaStatus: String
+            let imageAvailable: Bool
             let typeName: String
             let byteSize: Int64
             let sampleRate: Int?
@@ -109,6 +111,7 @@ struct FindNativeEntryTable: NSViewRepresentable {
                 ("collection", "", 26, 26, 26, nil),
                 ("audition", "", 26, 26, 26, nil),
                 ("disk", "DISK", 110, 72, 320, "disk"),
+                ("media", "MEDIA", 92, 76, 180, "media"),
                 ("name", "NAME", 128, 80, 640, "name"),
                 ("type", "TYPE", 60, 56, 180, "type"),
                 ("rate", "S9 RATE", 70, 62, 180, "rate"),
@@ -129,7 +132,9 @@ struct FindNativeEntryTable: NSViewRepresentable {
                         ascending: true
                     )
                 }
-                if specification.id == "disk" { column.isHidden = !showDisk }
+                if specification.id == "disk" || specification.id == "media" {
+                    column.isHidden = !showDisk
+                }
                 table.addTableColumn(column)
             }
         }
@@ -152,12 +157,15 @@ struct FindNativeEntryTable: NSViewRepresentable {
             if renderedShowDisk != showDisk {
                 renderedShowDisk = showDisk
                 table.tableColumn(withIdentifier: .init("disk"))?.isHidden = !showDisk
+                table.tableColumn(withIdentifier: .init("media"))?.isHidden = !showDisk
             }
 
             let rowKeys = sourceRows.map {
                 RowRenderKey(
                     id: $0.id,
                     diskName: $0.diskName,
+                    mediaStatus: model.mediaStatus(for: $0.image),
+                    imageAvailable: model.isImageAvailable($0.image),
                     typeName: $0.typeName,
                     byteSize: $0.byteSize,
                     sampleRate: $0.entry.sampleRate
@@ -232,6 +240,8 @@ struct FindNativeEntryTable: NSViewRepresentable {
                     light: 0x5F636B,
                     dark: 0x8D939D
                 ))
+            case "media":
+                return mediaCell(for: row)
             case "name":
                 return textCell(row.name, size: 12, middleTruncation: true)
             case "type":
@@ -314,6 +324,9 @@ struct FindNativeEntryTable: NSViewRepresentable {
         private func compare(_ left: FindRow, _ right: FindRow, key: String) -> ComparisonResult {
             switch key {
             case "disk": left.diskName.localizedStandardCompare(right.diskName)
+            case "media": model.mediaStatus(for: left.image).localizedStandardCompare(
+                model.mediaStatus(for: right.image)
+            )
             case "name": left.name.localizedStandardCompare(right.name)
             case "type": left.typeName.localizedStandardCompare(right.typeName)
             case "rate": NSNumber(value: left.sampleRateSortValue).compare(
@@ -376,6 +389,42 @@ struct FindNativeEntryTable: NSViewRepresentable {
                 imageView.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
                 imageView.widthAnchor.constraint(equalToConstant: 15),
                 imageView.heightAnchor.constraint(equalToConstant: 15)
+            ])
+            return cell
+        }
+
+        private func mediaCell(for row: FindRow) -> NSView {
+            let cell = FindNativeCellView()
+            let available = model.isImageAvailable(row.image)
+            let statusColor = available
+                ? NSColor.suiteDynamic(light: 0x1E22E8, dark: 0x3A53FF)
+                : NSColor.suiteDynamic(light: 0x9095A0, dark: 0x5E636D)
+            let imageView = NSImageView()
+            imageView.image = NSImage(
+                systemSymbolName: available
+                    ? "externaldrive.fill" : "externaldrive.badge.xmark",
+                accessibilityDescription: model.mediaStatus(for: row.image)
+            )
+            imageView.contentTintColor = statusColor
+            imageView.translatesAutoresizingMaskIntoConstraints = false
+            let field = NSTextField(labelWithString: model.mediaStatus(for: row.image))
+            field.font = suiteFont(size: 9)
+            field.textColor = statusColor
+            field.lineBreakMode = .byTruncatingTail
+            field.maximumNumberOfLines = 1
+            field.translatesAutoresizingMaskIntoConstraints = false
+            cell.normalTextColor = statusColor
+            cell.textField = field
+            cell.addSubview(imageView)
+            cell.addSubview(field)
+            NSLayoutConstraint.activate([
+                imageView.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 7),
+                imageView.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                imageView.widthAnchor.constraint(equalToConstant: 14),
+                imageView.heightAnchor.constraint(equalToConstant: 14),
+                field.leadingAnchor.constraint(equalTo: imageView.trailingAnchor, constant: 5),
+                field.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -5),
+                field.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
             ])
             return cell
         }
@@ -651,6 +700,15 @@ struct FindNativeEntryTable: NSViewRepresentable {
                     symbol: "folder",
                     action: #selector(showContextInFinder)
                 ))
+                if let media = model.mediaVolume(for: row.image), media.isEjectable {
+                    let ejectItem = menuItem(
+                        "CLEAN & EJECT \(media.name.uppercased())",
+                        symbol: "eject",
+                        action: #selector(ejectContextMedia)
+                    )
+                    ejectItem.isEnabled = model.canEject(media)
+                    menu.addItem(ejectItem)
+                }
             }
             return menu.items.isEmpty ? nil : menu
         }
@@ -725,6 +783,13 @@ struct FindNativeEntryTable: NSViewRepresentable {
         @objc private func showContextInFinder() {
             guard let row = contextRow else { return }
             model.showInFinder(row.image.imageURL)
+        }
+
+        @objc private func ejectContextMedia() {
+            guard let row = contextRow,
+                  let media = model.mediaVolume(for: row.image)
+            else { return }
+            model.eject(media)
         }
     }
 }

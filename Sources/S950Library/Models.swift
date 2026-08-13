@@ -160,7 +160,7 @@ public enum S950LibraryError: LocalizedError {
         switch self {
         case .folderNotFound(let path): return "The IMG folder does not exist: \(path)"
         case .helperNotFound:
-            return "AKAI Util was not found. Install EDIT950 or pass --akaiutil /path/to/akaiutil."
+            return "AKAI Util was not found for the command-line tool. Pass --akaiutil /path/to/akaiutil or set AKAIUTIL_PATH."
         case .helperNotExecutable(let path): return "AKAI Util is not executable: \(path)"
         case .helperExited(let detail): return "AKAI Util exited unexpectedly. \(detail)"
         case .promptNotFound(let detail): return "AKAI Util did not return a prompt. \(detail)"

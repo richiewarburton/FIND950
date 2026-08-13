@@ -110,6 +110,7 @@ final class SuitePreferences: ObservableObject {
     @Published var density: SuiteDensity { didSet { persistDensity() } }
     @Published var sidebarVisible: Bool { didSet { persistSidebar() } }
     @Published var inspectorVisible: Bool { didSet { persistInspector() } }
+    @Published var collectionVisible: Bool { didSet { persistCollection() } }
     @Published var zoom: SuiteZoomLevel { didSet { persistZoom() } }
 
     let app: SuiteApp
@@ -131,6 +132,10 @@ final class SuitePreferences: ObservableObject {
         inspectorVisible = defaults.object(forKey: inspectorKey) == nil
             ? defaultInspectorVisible
             : defaults.bool(forKey: inspectorKey)
+        let collectionKey = "suite.collection.visible.\(app.rawValue)"
+        collectionVisible = defaults.object(forKey: collectionKey) == nil
+            ? true
+            : defaults.bool(forKey: collectionKey)
         zoom = SuiteZoomLevel(
             rawValue: defaults.double(forKey: "suite.zoom.\(app.rawValue)")
         ) ?? .oneHundred
@@ -163,6 +168,12 @@ final class SuitePreferences: ObservableObject {
     private func persistSidebar() {
         guard !isReloading else { return }
         defaults.set(sidebarVisible, forKey: "suite.sidebar.visible.\(app.rawValue)")
+        notify()
+    }
+
+    private func persistCollection() {
+        guard !isReloading else { return }
+        defaults.set(collectionVisible, forKey: "suite.collection.visible.\(app.rawValue)")
         notify()
     }
 
@@ -209,6 +220,10 @@ final class SuitePreferences: ObservableObject {
         inspectorVisible = defaults.object(forKey: inspectorKey) == nil
             ? defaultInspectorVisible
             : defaults.bool(forKey: inspectorKey)
+        let collectionKey = "suite.collection.visible.\(app.rawValue)"
+        collectionVisible = defaults.object(forKey: collectionKey) == nil
+            ? true
+            : defaults.bool(forKey: collectionKey)
         zoom = SuiteZoomLevel(
             rawValue: defaults.double(forKey: "suite.zoom.\(app.rawValue)")
         ) ?? .oneHundred
@@ -617,6 +632,7 @@ struct SuiteEmptyState: View {
 }
 
 struct SuiteAboutView: View {
+    @Environment(\.dismiss) private var dismiss
     let product: String
     let version: String
 
@@ -630,17 +646,89 @@ struct SuiteAboutView: View {
                 .tracking(1.4)
                 .foregroundStyle(Color.suiteUnit)
             Divider().overlay(Color.suiteRule)
+            Text("AKAI UTIL 4.6.7 INCLUDED")
+                .font(SuiteFont.medium(10))
+                .tracking(1.2)
+            Text("READ-ONLY IMG ACCESS · NO SEPARATE INSTALL")
+                .font(SuiteFont.regular(9))
+                .tracking(0.8)
+                .foregroundStyle(Color.suiteUnit)
+            Text("SAFE EJECT USES NATIVE FIND950 CODE")
+                .font(SuiteFont.regular(9))
+                .tracking(0.8)
+                .foregroundStyle(Color.suiteUnit)
             Text("JETBRAINS MONO — SIL OFL 1.1")
                 .font(SuiteFont.regular(10))
                 .tracking(1.4)
                 .foregroundStyle(Color.suiteUnit)
             Button("VIEW LICENCE…", action: SuiteFontGate.showLicence)
                 .buttonStyle(SuiteSecondaryButtonStyle())
+            Button("DONE") { dismiss() }
+                .buttonStyle(SuitePrimaryButtonStyle(role: .neutral))
+                .keyboardShortcut(.cancelAction)
         }
         .padding(24)
-        .frame(width: 320, height: 260)
+        .frame(width: 390, height: 370)
         .foregroundStyle(Color.suiteInk)
         .background(Color.suitePanel)
+        .onExitCommand { dismiss() }
+        .background(SuiteEscapeDismissBridge { dismiss() })
+    }
+}
+
+private struct SuiteEscapeDismissBridge: NSViewRepresentable {
+    let onEscape: @MainActor () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onEscape: onEscape)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        context.coordinator.hostView = view
+        context.coordinator.install()
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.hostView = nsView
+        context.coordinator.onEscape = onEscape
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.uninstall()
+    }
+
+    @MainActor
+    final class Coordinator {
+        weak var hostView: NSView?
+        var onEscape: @MainActor () -> Void
+        private var monitor: Any?
+
+        init(onEscape: @escaping @MainActor () -> Void) {
+            self.onEscape = onEscape
+        }
+
+        func install() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
+                [weak self] event in
+                guard let self,
+                      event.keyCode == 53,
+                      let window = hostView?.window,
+                      event.window === window
+                else { return event }
+                onEscape()
+                return nil
+            }
+        }
+
+        func uninstall() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
     }
 }
 

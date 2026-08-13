@@ -71,6 +71,7 @@ public struct S950LibraryScanner: Sendable {
             cachedByPath[record.signature.canonicalPath] = record
         }
         var discoveredByPath: [String: DiscoveredImage] = [:]
+        var unavailableFolderPaths: Set<String> = []
         var failures: [S950ScanFailure] = []
 
         for folderURL in folderURLs.map(\.standardizedFileURL).sorted(by: {
@@ -102,6 +103,7 @@ public struct S950LibraryScanner: Sendable {
                     }
                 }
             } catch {
+                unavailableFolderPaths.insert(folderURL.standardizedFileURL.path)
                 failures.append(S950ScanFailure(
                     imageURL: folderURL,
                     message: (error as? LocalizedError)?.errorDescription
@@ -110,7 +112,14 @@ public struct S950LibraryScanner: Sendable {
             }
         }
 
-        var records: [S950LibraryIndexRecord] = []
+        // A configured removable or network volume can legitimately be absent.
+        // Preserve its last known catalogue until that location is mounted and
+        // scanned again; an available folder still treats deleted IMG files as
+        // deletions and removes their records normally.
+        var records = index.records.filter { record in
+            guard let folderURL = record.catalog.libraryFolderURL else { return false }
+            return unavailableFolderPaths.contains(folderURL.standardizedFileURL.path)
+        }
         var reusedImageCount = 0
         var inspectedImageCount = 0
         for discovered in discoveredByPath.values.sorted(by: {
@@ -159,11 +168,22 @@ public struct S950LibraryScanner: Sendable {
             }
         }
 
-        let updatedIndex = S950LibraryIndexDocument(records: records)
+        let uniqueRecords = Dictionary(grouping: records, by: {
+            $0.signature.canonicalPath
+        }).compactMap { _, candidates in
+            // A freshly discovered record is appended after any retained offline
+            // record, so it wins if paths overlap through nested library roots.
+            candidates.last
+        }.sorted {
+            $0.signature.canonicalPath.localizedStandardCompare(
+                $1.signature.canonicalPath
+            ) == .orderedAscending
+        }
+        let updatedIndex = S950LibraryIndexDocument(records: uniqueRecords)
         return S950IncrementalScanResult(
             collection: S950LibraryCollection(
                 folderURLs: folderURLs,
-                images: S950LibraryIndexDocument.sortedUnique(records.map(\.catalog)),
+                images: S950LibraryIndexDocument.sortedUnique(uniqueRecords.map(\.catalog)),
                 failures: failures
             ),
             index: updatedIndex,
@@ -354,34 +374,5 @@ public struct S950LibraryScanner: Sendable {
             includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles]
         ).filter { ["P9", "S9"].contains($0.pathExtension.uppercased()) }
-    }
-}
-
-public enum AkaiUtilLocator {
-    public static func locate(explicitPath: String? = nil) throws -> URL {
-        var candidates: [String] = []
-        if let explicitPath { candidates.append(explicitPath) }
-        if let environment = ProcessInfo.processInfo.environment["AKAIUTIL_PATH"] { candidates.append(environment) }
-        candidates += [
-            "/Applications/EDIT950.app/Contents/Resources/akaiutil",
-            "/Applications/AKAI Image Manager.app/Contents/Resources/akaiutil",
-            FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Applications/EDIT950.app/Contents/Resources/akaiutil").path,
-            FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Applications/AKAI Image Manager.app/Contents/Resources/akaiutil").path
-        ]
-        if let path = executableOnPath(named: "akaiutil") { candidates.append(path) }
-        guard let match = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
-            throw S950LibraryError.helperNotFound
-        }
-        return URL(fileURLWithPath: match)
-    }
-
-    private static func executableOnPath(named name: String) -> String? {
-        for directory in ProcessInfo.processInfo.environment["PATH", default: ""].split(separator: ":") {
-            let path = URL(fileURLWithPath: String(directory)).appendingPathComponent(name).path
-            if FileManager.default.isExecutableFile(atPath: path) { return path }
-        }
-        return nil
     }
 }

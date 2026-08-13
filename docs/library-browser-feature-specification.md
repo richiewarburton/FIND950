@@ -51,8 +51,9 @@ a second image-writing path.
 - macOS 14 or newer.
 - S900/S950 raw `.IMG` disk backups supported by AKAI Util.
 - EDIT950 for IMG creation, export, and editing handoffs.
-- The browser's bundled or separately selected compatible `akaiutil` helper for
-  read-only indexing and audition extraction only.
+- The browser's bundled Universal AKAI Util 4.6.7 helper for read-only indexing
+  and audition extraction only. The shipped app never asks the user to locate or
+  configure a separate executable.
 - PLAY950 VST3 for direct DAW playback handoff.
 
 The browser is installed as `/Applications/FIND950.app` and can be

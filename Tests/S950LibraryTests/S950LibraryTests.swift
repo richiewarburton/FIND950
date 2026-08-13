@@ -538,6 +538,39 @@ final class S950LibraryTests: XCTestCase {
         XCTAssertEqual(result.images.first?.volumes.first?.programs.first?.name, "JUNGLE.P9")
     }
 
+    func testIncrementalScanRetainsCachedImagesWhenConfiguredMediaIsOffline() async {
+        let missingFolder = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let imageURL = missingFolder.appendingPathComponent("REMOVABLE.IMG")
+        let catalog = S950ImageCatalog(
+            imageURL: imageURL,
+            name: "REMOVABLE",
+            volumes: [],
+            libraryFolderURL: missingFolder
+        )
+        let record = S950LibraryIndexRecord(
+            signature: S950ImageIndexSignature(
+                canonicalPath: imageURL.path,
+                byteSize: 1_440_000,
+                modifiedAt: Date(timeIntervalSince1970: 1_700_000_000)
+            ),
+            catalog: catalog
+        )
+
+        let result = await S950LibraryScanner(
+            helperURL: URL(fileURLWithPath: "/helper-is-not-needed-for-offline-media")
+        ).scanIncrementally(
+            folderURLs: [missingFolder],
+            cached: S950LibraryIndexDocument(records: [record])
+        )
+
+        XCTAssertEqual(result.index.records, [record])
+        XCTAssertEqual(result.collection.images, [catalog])
+        XCTAssertEqual(result.collection.failures.count, 1)
+        XCTAssertEqual(result.inspectedImageCount, 0)
+        XCTAssertEqual(result.reusedImageCount, 0)
+    }
+
     func testCombinesMoreThanOneLibraryFolder() async throws {
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let first = temporary.appendingPathComponent("First", isDirectory: true)
@@ -611,6 +644,127 @@ final class S950LibraryTests: XCTestCase {
 
         XCTAssertEqual(S9MetadataParser.sampleRate(in: data), 44_100)
         XCTAssertNil(S9MetadataParser.sampleRate(in: Data(repeating: 0, count: 12)))
+    }
+
+    func testRemovableMediaCleanupDefaultsMatchSupportedMetadataNames() {
+        XCTAssertEqual(RemovableMediaCleanupPolicy.defaultNames, [
+            ".DS_Store", "._*", "._AppleDouble", ".AppleDouble", ".fseventsd",
+            ".VolumeIcon.icns", ".TemporaryItems", ".DocumentRevisions-V100",
+            ".Spotlight-V100", ".Trashes", ".localized", ".AppleDB", ".apdisk",
+            "Thumbs.db", "Desktop.ini", ".syncing_db", ".Trash",
+            ".metadata_never_index", ".bzvol", ".dbxignore",
+            "System Volume Information", "$RECYCLE.BIN", "RECYCLED"
+        ])
+        XCTAssertEqual(
+            RemovableMediaCleanupPolicy().activeNames.count,
+            RemovableMediaCleanupPolicy.defaultNames.count
+        )
+    }
+
+    func testRemovableMediaCleanupSupportsCustomNamesAndExceptions() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let nested = root.appendingPathComponent("Samples", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let rootMetadata = root.appendingPathComponent(".DS_Store")
+        let nestedMetadata = nested.appendingPathComponent("Thumbs.db")
+        let keptMetadata = nested.appendingPathComponent("Desktop.ini")
+        let custom = nested.appendingPathComponent("SAMPLER.CACHE")
+        let appleDouble = nested.appendingPathComponent("._beat-disk.img")
+        let similarlyNamed = nested.appendingPathComponent("Thumbs.db.backup")
+        for url in [rootMetadata, nestedMetadata, keptMetadata, custom, appleDouble, similarlyNamed] {
+            try Data([0x01]).write(to: url)
+        }
+
+        var policy = RemovableMediaCleanupPolicy()
+        try policy.addCustomName("SAMPLER.CACHE")
+        try policy.addException("Samples/Desktop.ini")
+        let candidates = try RemovableMediaCleaner.candidates(on: root, policy: policy)
+
+        XCTAssertEqual(Set(candidates.map(\.relativePath)), [
+            ".DS_Store", "Samples/Thumbs.db", "Samples/SAMPLER.CACHE",
+            "Samples/._beat-disk.img"
+        ])
+        let result = try RemovableMediaCleaner.remove(candidates, from: root)
+        XCTAssertTrue(result.failures.isEmpty)
+        XCTAssertEqual(Set(result.removedPaths), Set(candidates.map(\.relativePath)))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: rootMetadata.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: nestedMetadata.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: custom.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: appleDouble.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: keptMetadata.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: similarlyNamed.path))
+        XCTAssertTrue(
+            try RemovableMediaCleaner.candidates(
+                on: root,
+                policy: policy
+            ).isEmpty
+        )
+    }
+
+    func testIncompleteCleanupInspectionDirectsUserToFullDiskAccess() {
+        let description = RemovableMediaCleanupError
+            .enumerationFailed("/Volumes/AKAI/.Spotlight-V100")
+            .errorDescription ?? ""
+        XCTAssertTrue(description.contains("Full Disk Access"))
+    }
+
+    func testCleanupExceptionInsideMatchedDirectoryPreservesTheDirectory() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let trash = root.appendingPathComponent(".Trashes", isDirectory: true)
+        let kept = trash.appendingPathComponent("Keep Me.txt")
+        try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+        try Data([0x01]).write(to: kept)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var policy = RemovableMediaCleanupPolicy()
+        try policy.addException(".Trashes/Keep Me.txt")
+        let candidates = try RemovableMediaCleaner.candidates(on: root, policy: policy)
+
+        XCTAssertFalse(candidates.contains { $0.relativePath == ".Trashes" })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: kept.path))
+    }
+
+    func testPartialCleanupReportsFailedTargetsAndKeepsSuccessfulRemovals() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        try Data([0x01]).write(to: outside)
+        let removable = root.appendingPathComponent(".DS_Store")
+        try Data([0x01]).write(to: removable)
+        let candidates = [
+            RemovableMediaCleanupCandidate(
+                url: outside,
+                relativePath: ".Spotlight-V100",
+                isDirectory: true
+            ),
+            RemovableMediaCleanupCandidate(
+                url: removable,
+                relativePath: ".DS_Store",
+                isDirectory: false
+            )
+        ]
+
+        let result = try RemovableMediaCleaner.remove(candidates, from: root)
+
+        XCTAssertEqual(result.removedPaths, [".DS_Store"])
+        XCTAssertEqual(result.failures.map(\.relativePath), [
+            ".Spotlight-V100"
+        ])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: removable.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outside.path))
     }
 
     private func write(_ value: String, into data: inout Data, at offset: Int) {

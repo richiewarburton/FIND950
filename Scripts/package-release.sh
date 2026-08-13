@@ -52,8 +52,27 @@ cp Resources/Fonts/JetBrainsMono-Medium.ttf "$RESOURCES_DIR/Fonts/"
 cp Resources/Fonts/JetBrainsMono-Bold.ttf "$RESOURCES_DIR/Fonts/"
 cp Resources/Fonts/fonts.sha256 "$RESOURCES_DIR/Fonts/"
 cp Resources/Licenses/JetBrainsMono-OFL-1.1.txt "$RESOURCES_DIR/Licenses/"
+"$PROJECT_DIR/Scripts/build-akaiutil-universal.sh" "$RESOURCES_DIR/akaiutil"
+cp ThirdParty/akaiutil-4.6.7/README.txt \
+    "$RESOURCES_DIR/Licenses/AKAI-Util-NOTICE.txt"
+cp ThirdParty/akaiutil-4.6.7/gpl-2.0.txt \
+    "$RESOURCES_DIR/Licenses/AKAI-Util-GPL-2.0.txt"
+cp ThirdParty/akaiutil-4.6.7/PROVENANCE.md \
+    "$RESOURCES_DIR/Licenses/AKAI-Util-SOURCE.txt"
 
-codesign --force --deep --sign - "$APP_DIR"
+HELPER_ARCHS=$(/usr/bin/lipo -archs "$RESOURCES_DIR/akaiutil")
+case " $HELPER_ARCHS " in
+    *" arm64 "*) ;;
+    *) echo "Bundled AKAI Util is missing arm64" >&2; exit 1 ;;
+esac
+case " $HELPER_ARCHS " in
+    *" x86_64 "*) ;;
+    *) echo "Bundled AKAI Util is missing x86_64" >&2; exit 1 ;;
+esac
+"$RESOURCES_DIR/akaiutil" -h >/dev/null 2>&1
+
+codesign --force --sign - "$RESOURCES_DIR/akaiutil"
+codesign --force --sign - "$APP_DIR"
 plutil -lint "$CONTENTS_DIR/Info.plist"
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' \
     "$CONTENTS_DIR/Info.plist")" = "FIND950"
@@ -75,19 +94,23 @@ case " $APP_ARCHS " in
     *" x86_64 "*) ;;
     *) echo "FIND950 is missing x86_64" >&2; exit 1 ;;
 esac
-if strings "$MACOS_DIR/FIND950" | grep -Fq '/Users/'; then
-    echo "release binary contains a developer-machine user path" >&2
+if strings "$MACOS_DIR/FIND950" "$RESOURCES_DIR/akaiutil" | grep -Fq '/Users/'; then
+    echo "release executable contains a developer-machine user path" >&2
     exit 1
 fi
 
 cp README.md "$PACKAGE_DIR/README.md"
 cp LICENSE "$PACKAGE_DIR/LICENSE"
+ditto docs "$PACKAGE_DIR/docs"
+ditto ThirdParty/akaiutil-4.6.7 "$PACKAGE_DIR/AKAI-Util-Source"
 (
     cd "$PACKAGE_DIR"
     shasum -a 256 \
         FIND950.app/Contents/MacOS/FIND950 \
+        FIND950.app/Contents/Resources/akaiutil \
         FIND950.app/Contents/Info.plist \
-        README.md LICENSE > SHA256SUMS.txt
+        README.md docs/USER_GUIDE.md \
+        LICENSE > SHA256SUMS.txt
 )
 
 mkdir -p "$OUTPUT_DIR"
