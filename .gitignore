@@ -1,6 +1,7 @@
 # Build output
 build/
 .build/
+dist/
 cmake-build-*/
 
 # IDE and OS metadata
