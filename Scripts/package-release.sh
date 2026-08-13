@@ -94,7 +94,10 @@ mkdir -p "$OUTPUT_DIR"
 ZIP_PATH="$OUTPUT_DIR/$PACKAGE_NAME.zip"
 ditto -c -k --sequesterRsrc --keepParent "$PACKAGE_DIR" "$ZIP_PATH"
 unzip -t "$ZIP_PATH" >/dev/null
-shasum -a 256 "$ZIP_PATH" > "$ZIP_PATH.sha256"
+(
+    cd "$OUTPUT_DIR"
+    shasum -a 256 "$PACKAGE_NAME.zip" > "$PACKAGE_NAME.zip.sha256"
+)
 
 echo "Created $ZIP_PATH"
 echo "Created $ZIP_PATH.sha256"
