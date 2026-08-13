@@ -1,0 +1,25 @@
+# Build output
+build/
+.build/
+cmake-build-*/
+
+# IDE and OS metadata
+.DS_Store
+.idea/
+.vscode/
+
+# Audio plug-in artefacts
+*.component
+*.vst3
+*.aaxplugin
+
+# Local test media and proprietary sampler content
+test-media/private/
+*.img
+*.hfe
+*.hda
+
+# Packaged brand asset archive (source assets live in Resources/BrandAssets)
+Resources/FIND950-Brand-Assets.zip
+# Retain the pre-rebrand archive locally as an ignored reference until artwork resumes.
+Resources/S950-Library-Manager-Brand-Assets.zip
