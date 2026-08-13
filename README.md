@@ -31,7 +31,10 @@ FIND950 indexes that folder and lets you:
 The source images are opened **read-only**. Scanning, searching, tagging and
 auditioning cannot alter your archive. You do not need the original sampler.
 
-Current version: **0.2.3 (build 5)**. Requires macOS 14 or later.
+Current public release:
+**[0.2.3 (build 5)](https://github.com/richiewarburton/FIND950/releases/tag/v0.2.3)**.
+The Universal macOS app supports Apple Silicon and Intel and requires macOS 14
+or later.
 
 ![FIND950 searching a multi-folder IMG library](docs/images/find950-library.png)
 
@@ -135,6 +138,9 @@ FIND950 is the discovery part of the
 | [PLAY950](https://github.com/richiewarburton/PLAY950) | Play native programs in a DAW and recall them with the project. |
 
 > **Find in FIND950, modify in EDIT950, play and recall in PLAY950.**
+
+The public Universal PLAY950 VST3 is available from its
+[GitHub Releases page](https://github.com/richiewarburton/PLAY950/releases/latest).
 
 When you choose **Export Program to IMG…**, FIND950 sends EDIT950 the exact
 source IMG, volume, P9 identity, source fingerprint and a read-only preview of
