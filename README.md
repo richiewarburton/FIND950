@@ -87,10 +87,15 @@ and other native program structure.
 Audition creates one private temporary WAV, plays it, and removes it when
 playback stops. It does not create a second loose WAV library or modify the IMG.
 
-## Installation today
+## Installation
 
-A packaged public download is still to come. The current working application is
-installed from source on a Mac with Xcode:
+Download the latest Universal macOS ZIP from
+[GitHub Releases](https://github.com/richiewarburton/FIND950/releases/latest),
+open it, and move `FIND950.app` to `/Applications`. The community build is
+ad-hoc signed rather than Apple-notarized, so macOS may require you to
+Control-click the app and choose **Open** the first time.
+
+To install the current source build on a Mac with Xcode instead:
 
 ```sh
 git clone https://github.com/richiewarburton/FIND950.git
