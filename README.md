@@ -32,7 +32,20 @@ FIND950 indexes that folder and lets you:
 The source images are opened **read-only**. Scanning, searching, tagging and
 auditioning cannot alter your archive. You do not need the original sampler.
 
-Current version: **0.2.5 (build 7)**. Requires macOS 14 or later.
+Current version: **0.2.6 (build 8)**. Requires macOS 14 or later.
+
+### What is new in 0.2.6
+
+- a persistent, user-visible diagnostic timeline records scans, selections,
+  audition preparation, exports, handoffs, errors and Safe Eject activity without
+  recording IMG or audio contents;
+- the log can be copied, saved, revealed in Finder or cleared, and can open
+  automatically when an error occurs; and
+- FIND950 and EDIT950 now coordinate use of removable volumes, so active work in
+  either app blocks Safe Eject before metadata cleanup begins while an idle
+  cached FIND950 catalogue remains available offline after a successful eject.
+
+See [the complete 0.2.6 release notes](docs/RELEASE_NOTES_0.2.6.md).
 
 ![FIND950 searching a multi-folder IMG library](docs/images/find950-library.png)
 
@@ -164,6 +177,9 @@ FIND950's AKAI Util session is structurally read-only:
 - Safe Eject previews configured metadata cleanup, verifies that no configured
   item remains, and leaves the media mounted if deletion or verification fails;
   Full Disk Access is required for protected `.Spotlight-V100` data; and
+- EDIT950 and FIND950 coordinate active use of the same removable volume before
+  cleanup, so an open EDIT950 IMG or an active FIND950 scan/export blocks eject
+  with no metadata removed; and
 - destination selection and every IMG mutation belong to EDIT950.
 
 Keep an independent archival backup anyway—especially when the IMG files are

@@ -183,6 +183,20 @@ mounted rather than claiming it is clean. Grant FIND950 Full Disk Access in
 **System Settings → Privacy & Security → Full Disk Access**, quit and reopen the
 app, then try again.
 
+FIND950 and EDIT950 coordinate removable-volume use. If EDIT950 has an IMG open
+on the same drive, or FIND950 is actively scanning, extracting an audition,
+exporting or preparing a handoff, Safe Eject stops before cleanup and names the
+operation that is still using the drive. Selecting and browsing an already
+cached FIND950 disk does not keep the drive busy. After a successful eject the
+cached catalogue remains searchable, is marked offline and reconnects when the
+same media returns.
+
+The **Diagnostic Log** control shows a persistent, size-limited activity
+timeline. It records actions and errors, not IMG or audio contents, and shortens
+home and temporary paths. Use its **Copy**, **Save**, **Reveal** and **Clear**
+buttons when an intermittent problem is difficult to describe. Settings can
+open the log automatically when an error occurs.
+
 You can also choose where the search index and shared tag file live. Moving the
 index does not move your IMG collection.
 

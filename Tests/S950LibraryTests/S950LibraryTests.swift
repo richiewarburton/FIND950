@@ -3,6 +3,117 @@ import XCTest
 @testable import S950Library
 
 final class S950LibraryTests: XCTestCase {
+    func testCrossAppVolumeInterlockBlocksCleanupAndNewWork() throws {
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "find950-volume-coordination-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let volume = temporary.appendingPathComponent("TEST USB", isDirectory: true)
+        let coordination = temporary.appendingPathComponent("coordination", isDirectory: true)
+        try FileManager.default.createDirectory(at: volume, withIntermediateDirectories: true)
+        let metadata = volume.appendingPathComponent(".DS_Store")
+        try Data("untouched".utf8).write(to: metadata)
+        let editID = UUID()
+        let edit = VolumeCoordinationCenter(
+            appName: "EDIT950",
+            instanceID: editID,
+            processID: 101,
+            rootURL: coordination,
+            processIsAlive: { $0 == 101 || $0 == 202 }
+        )
+        let find = VolumeCoordinationCenter(
+            appName: "FIND950",
+            processID: 202,
+            rootURL: coordination,
+            processIsAlive: { $0 == 101 || $0 == 202 }
+        )
+
+        let use = try edit.beginUse(of: volume, detail: "IMG open: OTHER.IMG")
+        XCTAssertThrowsError(try find.beginEject(of: volume)) { error in
+            guard case let VolumeCoordinationError.volumeInUse(_, uses) = error else {
+                return XCTFail("Expected a volume-in-use error, got \(error)")
+            }
+            XCTAssertEqual(uses.map(\.appName), ["EDIT950"])
+        }
+        XCTAssertEqual(try Data(contentsOf: metadata), Data("untouched".utf8))
+
+        use.release()
+        let eject = try find.beginEject(of: volume)
+        XCTAssertThrowsError(
+            try edit.beginUse(of: volume, detail: "Starting another operation")
+        ) { error in
+            guard case VolumeCoordinationError.ejectInProgress = error else {
+                return XCTFail("Expected an eject-in-progress error, got \(error)")
+            }
+        }
+        eject.release()
+
+        let ownUse = try edit.beginUse(of: volume, detail: "IMG open")
+        let ownEject = try edit.beginEject(of: volume)
+        ownEject.release()
+        ownUse.release()
+    }
+
+    @MainActor
+    func testDiagnosticLogPersistsRedactsRollsAndExports() throws {
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "find950-diagnostics-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let liveURL = temporary.appendingPathComponent("FIND950.log")
+        let exportedURL = temporary.appendingPathComponent("exported.log")
+        let fixedDate = Date(timeIntervalSince1970: 1_723_638_400)
+        let log = DiagnosticLogStore(
+            appName: "FIND950",
+            fileURL: liveURL,
+            maximumBytes: 700,
+            startSession: false,
+            now: { fixedDate }
+        )
+        let privatePath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Music/BREAKS.img").path
+        log.record(
+            .info,
+            category: "scan",
+            message: "Indexed \(privatePath)",
+            fields: [
+                "image": privatePath,
+                "workspace": "/tmp/find950-workspace/file.wav"
+            ]
+        )
+        XCTAssertTrue(log.text.contains("~/Music/BREAKS.img"))
+        XCTAssertTrue(log.text.contains("<temporary>/find950-workspace/file.wav"))
+        XCTAssertFalse(log.text.contains("/tmp/find950-workspace"))
+        XCTAssertFalse(log.text.contains(FileManager.default.homeDirectoryForCurrentUser.path))
+        for index in 0..<30 {
+            log.record(
+                .debug,
+                category: "retention",
+                message: "event \(index)",
+                fields: ["payload": String(repeating: "x", count: 40)]
+            )
+        }
+        XCTAssertTrue(log.text.contains("event 29"))
+        XCTAssertFalse(log.text.contains("event 0"))
+        XCTAssertLessThanOrEqual(log.text.utf8.count, 700)
+        let reopened = DiagnosticLogStore(
+            appName: "FIND950",
+            fileURL: liveURL,
+            maximumBytes: 700,
+            startSession: false
+        )
+        XCTAssertEqual(reopened.text, log.text)
+        try log.saveCopy(to: exportedURL)
+        XCTAssertEqual(
+            try String(contentsOf: exportedURL, encoding: .utf8),
+            log.text
+        )
+        log.clear()
+        XCTAssertTrue(log.text.contains("Log cleared by user"))
+    }
+
     func testCachedReclassificationPreservesS9SampleRateAndP9References() {
         let image = S950ImageCatalog(
             imageURL: URL(fileURLWithPath: "/tmp/rates.img"),

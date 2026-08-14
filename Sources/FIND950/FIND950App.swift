@@ -43,19 +43,27 @@ struct FIND950App: App {
 
     var body: some Scene {
         WindowGroup("FIND950") {
-            SuiteZoomContainer {
-                Find950View(model: model)
-                    .suiteSurface()
-            }
-                .environmentObject(suitePreferences)
-                .onAppear { model.undoManager = undoHistory.manager }
-                .frame(minWidth: 880, minHeight: 520)
-                .sheet(isPresented: $showAbout) {
-                    SuiteAboutView(
-                        product: "FIND950",
-                        version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "DEV"
-                    )
+            VStack(spacing: 0) {
+                SuiteZoomContainer {
+                    Find950View(model: model)
+                        .suiteSurface()
                 }
+                if model.isLogVisible {
+                    Divider()
+                    FindDiagnosticLogView(model: model)
+                        .frame(minHeight: 120, idealHeight: 190, maxHeight: 280)
+                }
+            }
+            .background(Color.suiteBackground)
+            .environmentObject(suitePreferences)
+            .onAppear { model.undoManager = undoHistory.manager }
+            .frame(minWidth: 880, minHeight: 520)
+            .sheet(isPresented: $showAbout) {
+                SuiteAboutView(
+                    product: "FIND950",
+                    version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "DEV"
+                )
+            }
         }
         .defaultSize(width: 1240, height: 760)
         .commands {
@@ -84,6 +92,13 @@ struct FIND950App: App {
                     _ = model.handleSpaceForSelectedEntry()
                 }
                 .keyboardShortcut(.space, modifiers: [])
+            }
+            CommandMenu("Diagnostics") {
+                Toggle("Show Diagnostic Log", isOn: $model.isLogVisible)
+                    .keyboardShortcut("l", modifiers: [.command, .option])
+                Divider()
+                Button("Save Diagnostic Log…") { model.saveDiagnosticLog() }
+                Button("Reveal Live Log in Finder") { model.revealDiagnosticLog() }
             }
             CommandGroup(replacing: .sidebar) {
                 Button(
@@ -253,10 +268,26 @@ final class Find950Model: ObservableObject {
         }
     }
     @Published private(set) var folderURLs: [URL]
-    @Published var selectedImageID: URL?
+    @Published var selectedImageID: URL? {
+        didSet {
+            guard selectedImageID != oldValue else { return }
+            diagnostics.record(
+                .info,
+                category: "selection",
+                message: "Selected IMG changed",
+                fields: ["image": selectedImageID?.path ?? "none"]
+            )
+        }
+    }
     @Published var selectedEntryIDs: Set<String> = [] {
         didSet {
             guard oldValue != selectedEntryIDs else { return }
+            diagnostics.record(
+                .debug,
+                category: "selection",
+                message: "Native-file selection changed",
+                fields: ["count": String(selectedEntryIDs.count)]
+            )
             if let primarySelectedEntryID,
                selectedEntryIDs.contains(primarySelectedEntryID) {
                 return
@@ -267,18 +298,57 @@ final class Find950Model: ObservableObject {
         }
     }
     @Published var searchText = ""
-    @Published var searchScope: LibrarySearchScope = .selectedDisk
+    @Published var searchScope: LibrarySearchScope = .selectedDisk {
+        didSet {
+            guard searchScope != oldValue else { return }
+            diagnostics.record(
+                .info,
+                category: "search",
+                message: "Search scope changed",
+                fields: ["scope": searchScope.rawValue]
+            )
+        }
+    }
     @Published private(set) var searchFocusRequest = 0
     @Published private(set) var mainPaneFocusRequest = 0
     @Published var selectedTagFilterID: UUID?
-    @Published var showTagManager = false
-    @Published var relatedPrograms: RelatedProgramsContext?
+    @Published var showTagManager = false {
+        didSet {
+            guard showTagManager != oldValue else { return }
+            diagnostics.record(
+                .info,
+                category: "dialogue",
+                message: showTagManager ? "Tag manager presented" : "Tag manager dismissed"
+            )
+        }
+    }
+    @Published var relatedPrograms: RelatedProgramsContext? {
+        didSet {
+            guard relatedPrograms?.id != oldValue?.id else { return }
+            diagnostics.record(
+                .info,
+                category: "dialogue",
+                message: relatedPrograms == nil
+                    ? "Related-programs dialogue dismissed"
+                    : "Related-programs dialogue presented",
+                fields: ["sample": relatedPrograms?.sample.name ?? "none"]
+            )
+        }
+    }
     @Published private(set) var collectedEntryIDs: Set<String> {
         didSet { invalidateCollectionCache() }
     }
     @Published var notice: BrowserNotice? {
         didSet {
             if notice != nil, errorMessage != nil { errorMessage = nil }
+            if let notice, notice.id != oldValue?.id {
+                diagnostics.record(
+                    .info,
+                    category: "operation",
+                    message: notice.title,
+                    fields: ["detail": notice.message]
+                )
+            }
         }
     }
     @Published private(set) var isScanning = false
@@ -298,16 +368,37 @@ final class Find950Model: ObservableObject {
     @Published var errorMessage: String? {
         didSet {
             if errorMessage != nil, notice != nil { notice = nil }
+            guard let errorMessage, errorMessage != oldValue else { return }
+            diagnostics.record(
+                .error,
+                category: "operation",
+                message: "Operation failed",
+                fields: ["error": errorMessage]
+            )
+            if autoOpenDiagnosticLogOnError { isLogVisible = true }
+        }
+    }
+    @Published var isLogVisible = false
+    @Published var autoOpenDiagnosticLogOnError: Bool = UserDefaults.standard.object(
+        forKey: "FIND950.autoOpenDiagnosticLogOnError"
+    ) as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(
+                autoOpenDiagnosticLogOnError,
+                forKey: "FIND950.autoOpenDiagnosticLogOnError"
+            )
         }
     }
 
     weak var undoManager: UndoManager?
+    let diagnostics = DiagnosticLogStore(appName: "FIND950")
 
     private let defaultsKey = "FIND950.folderPaths"
     private let hiddenFoldersDefaultsKey = "FIND950.excludedSearchFolderPaths"
     private let collectionDefaultsKey = "FIND950.collectedEntryIDs"
     private let mediaCleanupDefaultsKey = "FIND950.removableMediaCleanupPolicy"
     private let audition = SafeSampleAuditionController()
+    private let volumeCoordination = VolumeCoordinationCenter(appName: "FIND950")
     private var edit950ApplicationURL: URL?
     private var indexCache: S950LibraryIndexDocument
     private var tagLibrary: SharedTagLibrary
@@ -349,6 +440,55 @@ final class Find950Model: ObservableObject {
 
     func dismissError() {
         errorMessage = nil
+    }
+
+    func copyDiagnosticLog() {
+        diagnostics.record(
+            .info,
+            category: "diagnostics",
+            message: "Log copied by user"
+        )
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(diagnostics.text, forType: .string)
+    }
+
+    func saveDiagnosticLog() {
+        let panel = NSSavePanel()
+        panel.title = "Save FIND950 Diagnostic Log"
+        panel.message = "The report contains the rolling activity timeline, app version and operation state. Home and temporary paths are shortened. It contains no sample audio or IMG data."
+        panel.prompt = "Save Diagnostic Log"
+        panel.nameFieldStringValue = "FIND950-diagnostic-\(Self.diagnosticFileStamp()).log"
+        panel.allowedContentTypes = [.plainText]
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        diagnostics.record(
+            .info,
+            category: "diagnostics",
+            message: "Diagnostic log exported by user",
+            fields: ["destination": destination.path]
+        )
+        do {
+            try diagnostics.saveCopy(to: destination)
+            notice = BrowserNotice(
+                title: "Diagnostic Log Saved",
+                message: "Saved a readable copy at \(destination.path)."
+            )
+        } catch {
+            errorMessage = "Couldn’t save the diagnostic log: \(error.localizedDescription)"
+        }
+    }
+
+    func revealDiagnosticLog() {
+        diagnostics.record(
+            .info,
+            category: "diagnostics",
+            message: "Live diagnostic log revealed in Finder"
+        )
+        NSWorkspace.shared.activateFileViewerSelecting([diagnostics.fileURL])
+    }
+
+    func clearDiagnosticLog() {
+        diagnostics.clear()
     }
 
     func openFullDiskAccessSettings() {
@@ -429,10 +569,10 @@ final class Find950Model: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let model = self else { return }
             Task { @MainActor in
-                model.refreshMediaVolumes()
-                if !model.folderURLs.isEmpty { model.scanFolders() }
+                guard let self else { return }
+                self.refreshMediaVolumes()
+                if !self.folderURLs.isEmpty { self.scanFolders() }
             }
         })
         for name in [NSWorkspace.didUnmountNotification, NSWorkspace.didRenameVolumeNotification] {
@@ -441,11 +581,25 @@ final class Find950Model: ObservableObject {
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
-                guard let model = self else { return }
-                Task { @MainActor in model.refreshMediaVolumes() }
+                Task { @MainActor in self?.refreshMediaVolumes() }
             })
         }
         rebuildEntryLookup()
+        diagnostics.record(
+            .info,
+            category: "lifecycle",
+            message: "Library model ready",
+            fields: [
+                "folders": String(folderURLs.count),
+                "cachedImages": String(collection?.images.count ?? 0),
+                "cachedPrograms": String(
+                    collection?.images.reduce(0) { $0 + $1.programCount } ?? 0
+                ),
+                "cachedSamples": String(
+                    collection?.images.reduce(0) { $0 + $1.sampleCount } ?? 0
+                )
+            ]
+        )
         if !folderURLs.isEmpty { scanFolders() }
     }
 
@@ -534,11 +688,30 @@ final class Find950Model: ObservableObject {
             return
         }
 
+        let ejectLease: VolumeEjectLease
+        do {
+            ejectLease = try volumeCoordination.beginEject(of: media.mountURL)
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
+
+        diagnostics.record(
+            .info,
+            category: "safe-eject",
+            message: "Safe eject requested",
+            fields: [
+                "media": media.name,
+                "mount": media.mountURL.path
+            ]
+        )
+
         audition.stop()
         auditioningID = nil
         ejectingMediaIDs.insert(media.id)
         errorMessage = nil
         Task {
+            defer { ejectLease.release() }
             var cleanupResult = RemovableMediaCleanupResult(
                 removedPaths: [],
                 failures: []
@@ -552,9 +725,25 @@ final class Find950Model: ObservableObject {
                     )
                 }.value
 
+                diagnostics.record(
+                    .info,
+                    category: "safe-eject",
+                    message: "Cleanup inspection completed",
+                    fields: [
+                        "media": media.name,
+                        "candidates": String(candidates.count)
+                    ]
+                )
+
                 if !candidates.isEmpty {
                     switch confirmCleanup(candidates, media: media) {
                     case .cancel:
+                        diagnostics.record(
+                            .info,
+                            category: "safe-eject",
+                            message: "Safe eject cancelled at cleanup confirmation",
+                            fields: ["media": media.name]
+                        )
                         ejectingMediaIDs.remove(media.id)
                         return
                     case .cleanAndEject:
@@ -593,6 +782,15 @@ final class Find950Model: ObservableObject {
                 }
 
                 try await nativeEject(media)
+                diagnostics.record(
+                    .info,
+                    category: "safe-eject",
+                    message: "Media unmounted and ejected",
+                    fields: [
+                        "media": media.name,
+                        "removedMetadataItems": String(cleanupResult.removedPaths.count)
+                    ]
+                )
                 refreshMediaVolumes()
                 notice = BrowserNotice(
                     title: cleanupResult.removedPaths.isEmpty
@@ -703,6 +901,35 @@ final class Find950Model: ObservableObject {
         }
         return FindMediaVolumeResolver.mountedVolume(containing: url)
             ?? FindMediaVolumeResolver.offlineVolumeHint(containing: url)
+    }
+
+    private func beginVolumeUse(
+        for urls: [URL],
+        detail: String
+    ) throws -> [VolumeUseLease] {
+        var volumesByPath: [String: URL] = [:]
+        for media in urls.compactMap({
+            FindMediaVolumeResolver.mountedVolume(containing: $0)
+        }) {
+            volumesByPath[media.mountURL.standardizedFileURL.path] = media.mountURL
+        }
+        let volumes = volumesByPath.values
+        var leases: [VolumeUseLease] = []
+        do {
+            for volume in volumes {
+                leases.append(
+                    try volumeCoordination.beginUse(of: volume, detail: detail)
+                )
+            }
+            return leases
+        } catch {
+            leases.forEach { $0.release() }
+            throw error
+        }
+    }
+
+    private func releaseVolumeUse(_ leases: [VolumeUseLease]) {
+        leases.forEach { $0.release() }
     }
 
     private enum CleanupEjectDecision {
@@ -1013,13 +1240,26 @@ final class Find950Model: ObservableObject {
     }
 
     func addFolders() {
+        diagnostics.record(.info, category: "ui", message: "Add IMG folders dialogue shown")
         let panel = NSOpenPanel()
         panel.title = "Add folders containing S900/S950 IMG backups"
         panel.prompt = "Add to Library"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = true
-        guard panel.runModal() == .OK else { return }
+        guard panel.runModal() == .OK else {
+            diagnostics.record(.info, category: "ui", message: "Add IMG folders dialogue cancelled")
+            return
+        }
+        diagnostics.record(
+            .info,
+            category: "library",
+            message: "IMG folders added",
+            fields: [
+                "count": String(panel.urls.count),
+                "folders": panel.urls.map(\.path).joined(separator: " | ")
+            ]
+        )
         var known = Set(folderURLs.map { $0.standardizedFileURL })
         folderURLs.append(contentsOf: panel.urls.map(\.standardizedFileURL).filter { known.insert($0).inserted })
         folderURLs.sort { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
@@ -1029,6 +1269,12 @@ final class Find950Model: ObservableObject {
     }
 
     func removeFolder(_ url: URL) {
+        diagnostics.record(
+            .info,
+            category: "library",
+            message: "IMG folder removed",
+            fields: ["folder": url.path]
+        )
         let index = folderURLs.firstIndex {
             $0.standardizedFileURL == url.standardizedFileURL
         }
@@ -1113,11 +1359,21 @@ final class Find950Model: ObservableObject {
         auditioningID = nil
         if isScanning {
             scanPending = true
+            diagnostics.record(
+                .debug,
+                category: "scan",
+                message: "Additional scan queued while scan is active"
+            )
             return
         }
         guard !folderURLs.isEmpty else {
             collection = S950LibraryCollection(folderURLs: [], images: [], failures: [])
             selectedImageID = nil
+            diagnostics.record(
+                .info,
+                category: "scan",
+                message: "Library cleared because no IMG folders are configured"
+            )
             return
         }
         let helper: URL
@@ -1128,13 +1384,33 @@ final class Find950Model: ObservableObject {
             return
         }
         let requestedFolders = folderURLs
+        let volumeLeases: [VolumeUseLease]
+        do {
+            volumeLeases = try beginVolumeUse(
+                for: requestedFolders,
+                detail: "Scanning IMG folders"
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
         let cachedIndex = indexCache
         let indexURL = LibraryMetadataPersistence.indexFileURL(
             in: libraryDataDirectoryURL
         )
         isScanning = true
         errorMessage = nil
+        diagnostics.record(
+            .info,
+            category: "scan",
+            message: "Library scan started",
+            fields: [
+                "folders": String(requestedFolders.count),
+                "recursive": "true"
+            ]
+        )
         Task {
+            defer { releaseVolumeUse(volumeLeases) }
             let update = await Task.detached(priority: .utility) {
                 await S950LibraryScanner(helperURL: helper).scanIncrementally(
                     folderURLs: requestedFolders,
@@ -1165,8 +1441,28 @@ final class Find950Model: ObservableObject {
                         .map { "\($0.imageURL.lastPathComponent): \($0.message)" }
                         .joined(separator: "\n")
                 }
+                diagnostics.record(
+                    actionableFailures.isEmpty ? .info : .warning,
+                    category: "scan",
+                    message: "Library scan completed",
+                    fields: [
+                        "images": String(update.collection.images.count),
+                        "programs": String(
+                            update.collection.images.reduce(0) { $0 + $1.programCount }
+                        ),
+                        "samples": String(
+                            update.collection.images.reduce(0) { $0 + $1.sampleCount }
+                        ),
+                        "failures": String(actionableFailures.count)
+                    ]
+                )
             } else {
                 scanPending = true
+                diagnostics.record(
+                    .debug,
+                    category: "scan",
+                    message: "Scan result superseded by a folder change"
+                )
             }
             isScanning = false
             if scanPending {
@@ -1177,6 +1473,12 @@ final class Find950Model: ObservableObject {
     }
 
     func rescanImage(_ image: S950ImageCatalog) {
+        diagnostics.record(
+            .info,
+            category: "scan",
+            message: "Forced IMG rescan requested",
+            fields: ["image": image.imageURL.path]
+        )
         indexCache = S950LibraryIndexDocument(
             records: indexCache.records.filter {
                 $0.catalog.imageURL.standardizedFileURL != image.imageURL.standardizedFileURL
@@ -1198,7 +1500,26 @@ final class Find950Model: ObservableObject {
         panel.nameFieldStringValue = "\((sample.name as NSString).deletingPathExtension).wav"
         panel.allowedContentTypes = [.wav]
         panel.canCreateDirectories = true
-        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        guard panel.runModal() == .OK, let destination = panel.url else {
+            diagnostics.record(
+                .info,
+                category: "export",
+                message: "Sample WAV export cancelled",
+                fields: ["sample": sample.name]
+            )
+            return
+        }
+        diagnostics.record(
+            .info,
+            category: "export",
+            message: "Sample WAV export started",
+            fields: [
+                "sample": sample.name,
+                "image": image.imageURL.path,
+                "volume": volume.path,
+                "destination": destination.path
+            ]
+        )
         let helperURL: URL
         do {
             helperURL = try BundledAkaiUtil.locate()
@@ -1206,8 +1527,19 @@ final class Find950Model: ObservableObject {
             errorMessage = error.localizedDescription
             return
         }
+        let volumeLeases: [VolumeUseLease]
+        do {
+            volumeLeases = try beginVolumeUse(
+                for: [image.imageURL],
+                detail: "Exporting sample: \(sample.name)"
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
         isWorking = true
         Task {
+            defer { releaseVolumeUse(volumeLeases) }
             let workspace = FileManager.default.temporaryDirectory
                 .appendingPathComponent("find950-wav-\(UUID().uuidString)", isDirectory: true)
             defer { try? FileManager.default.removeItem(at: workspace) }
@@ -1239,13 +1571,41 @@ final class Find950Model: ObservableObject {
         if auditioningID == id {
             audition.stop()
             auditioningID = nil
+            diagnostics.record(
+                .info,
+                category: "audition",
+                message: "Sample audition stopped",
+                fields: ["sample": sample.name]
+            )
             return
         }
         guard requireAvailable(image, action: "audition \(sample.name)") else { return }
         audition.stop()
         auditioningID = id
         errorMessage = nil
+        diagnostics.record(
+            .info,
+            category: "audition",
+            message: "Sample audition requested",
+            fields: [
+                "sample": sample.name,
+                "image": image.imageURL.path,
+                "volume": volume.path
+            ]
+        )
+        let volumeLeases: [VolumeUseLease]
+        do {
+            volumeLeases = try beginVolumeUse(
+                for: [image.imageURL],
+                detail: "Preparing audition: \(sample.name)"
+            )
+        } catch {
+            auditioningID = nil
+            errorMessage = error.localizedDescription
+            return
+        }
         Task {
+            defer { releaseVolumeUse(volumeLeases) }
             let workspace = URL(fileURLWithPath: "/tmp", isDirectory: true)
                 .appendingPathComponent("s950-audition-\(UUID().uuidString)", isDirectory: true)
             do {
@@ -1261,6 +1621,12 @@ final class Find950Model: ObservableObject {
                     return
                 }
                 try audition.play(wavURL: wavURL, workspaceURL: workspace)
+                diagnostics.record(
+                    .info,
+                    category: "audition",
+                    message: "Sample audition playing",
+                    fields: ["sample": sample.name]
+                )
             } catch {
                 try? FileManager.default.removeItem(at: workspace)
                 if auditioningID == id { auditioningID = nil }
@@ -1275,16 +1641,40 @@ final class Find950Model: ObservableObject {
 
     func openInEDIT950(_ image: S950ImageCatalog) {
         guard requireAvailable(image, action: "open \(image.name)") else { return }
+        let requestID = UUID().uuidString
+        diagnostics.record(
+            .info,
+            category: "handoff",
+            message: "Opening IMG in EDIT950",
+            fields: [
+                "requestID": requestID,
+                "image": image.imageURL.path
+            ]
+        )
         do {
+            let volumeLeases = try beginVolumeUse(
+                for: [image.imageURL],
+                detail: "Handing IMG to EDIT950: \(image.name)"
+            )
             let application = try locateEDIT950Application()
             let configuration = NSWorkspace.OpenConfiguration()
             configuration.activates = true
             Task {
+                defer { releaseVolumeUse(volumeLeases) }
                 do {
                     try await NSWorkspace.shared.open(
                         [image.imageURL],
                         withApplicationAt: application,
                         configuration: configuration
+                    )
+                    diagnostics.record(
+                        .info,
+                        category: "handoff",
+                        message: "IMG handed to EDIT950",
+                        fields: [
+                            "requestID": requestID,
+                            "image": image.imageURL.path
+                        ]
                     )
                 } catch {
                     errorMessage = "Couldn’t open \(image.name) in EDIT950: \(error.localizedDescription)"
@@ -1302,12 +1692,24 @@ final class Find950Model: ObservableObject {
         guard requireAvailable(image, action: "open \(program.name) in PLAY950") else {
             return
         }
+        let requestID = UUID().uuidString
+        diagnostics.record(
+            .info,
+            category: "handoff",
+            message: "Program sent to PLAY950",
+            fields: [
+                "requestID": requestID,
+                "image": image.imageURL.path,
+                "program": program.name
+            ]
+        )
         DistributedNotificationCenter.default().postNotificationName(
             Notification.Name("com.e45recordings.PLAY950.LoadContent"),
             object: nil,
             userInfo: [
                 "path": image.imageURL.path,
-                "program": (program.name as NSString).deletingPathExtension
+                "program": (program.name as NSString).deletingPathExtension,
+                "requestID": requestID
             ],
             deliverImmediately: true
         )
@@ -1317,7 +1719,8 @@ final class Find950Model: ObservableObject {
             object: nil,
             userInfo: [
                 "path": image.imageURL.path,
-                "program": (program.name as NSString).deletingPathExtension
+                "program": (program.name as NSString).deletingPathExtension,
+                "requestID": requestID
             ],
             deliverImmediately: true
         )
@@ -1334,9 +1737,31 @@ final class Find950Model: ObservableObject {
         exportMode: String = "image"
     ) {
         guard requireAvailable(image, action: "export \(program.name)") else { return }
+        let volumeLeases: [VolumeUseLease]
+        do {
+            volumeLeases = try beginVolumeUse(
+                for: [image.imageURL],
+                detail: "Exporting program: \(program.name)"
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
+        diagnostics.record(
+            .info,
+            category: "handoff",
+            message: "Program export through EDIT950 requested",
+            fields: [
+                "image": image.imageURL.path,
+                "volume": volume.path,
+                "program": program.name,
+                "mode": exportMode
+            ]
+        )
         isWorking = true
         errorMessage = nil
         Task {
+            defer { releaseVolumeUse(volumeLeases) }
             do {
                 let application = try locateEDIT950Application()
                 let transfer = S950ProgramTransfer()
@@ -1346,6 +1771,16 @@ final class Find950Model: ObservableObject {
                     program: program,
                     sourceEntries: volume.entries,
                     exportMode: exportMode
+                )
+                diagnostics.record(
+                    .info,
+                    category: "handoff",
+                    message: "Program handoff prepared",
+                    fields: [
+                        "requestID": handoff.request.requestID.uuidString,
+                        "program": program.name,
+                        "mode": exportMode
+                    ]
                 )
                 let configuration = NSWorkspace.OpenConfiguration()
                 configuration.activates = true
@@ -1373,6 +1808,17 @@ final class Find950Model: ObservableObject {
                             )
                         }
                     }
+                )
+                diagnostics.record(
+                    response.status == .completed ? .info : .warning,
+                    category: "handoff",
+                    message: "EDIT950 returned a terminal program-export response",
+                    fields: [
+                        "requestID": response.requestID.uuidString,
+                        "status": response.status.rawValue,
+                        "errorCode": response.errorCode ?? "none",
+                        "summary": response.summary ?? "none"
+                    ]
                 )
                 switch response.status {
                 case .completed:
@@ -1412,6 +1858,16 @@ final class Find950Model: ObservableObject {
 
     func exportCollectionInEDIT950() {
         let manifest = collectionManifest
+        diagnostics.record(
+            .info,
+            category: "handoff",
+            message: "Collection export through EDIT950 requested",
+            fields: [
+                "files": String(manifest.fileCount),
+                "bytes": String(manifest.totalBytes),
+                "blockers": String(manifest.exportBlockers.count)
+            ]
+        )
         guard manifest.exportBlockers.isEmpty else {
             errorMessage = manifest.exportBlockers.joined(separator: "\n\n")
             return
@@ -1431,15 +1887,35 @@ final class Find950Model: ObservableObject {
                 entry: $0.entry
             )
         }
+        let volumeLeases: [VolumeUseLease]
+        do {
+            volumeLeases = try beginVolumeUse(
+                for: selections.map(\.sourceImage),
+                detail: "Exporting FIND950 collection"
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
         isWorking = true
         collectionExportStatus = "PREPARING…"
         errorMessage = nil
         Task {
+            defer { releaseVolumeUse(volumeLeases) }
             do {
                 let application = try locateEDIT950Application()
                 let handoff = try await Task.detached(priority: .userInitiated) {
                     try S950CollectionTransfer().prepareHandoff(selections: selections)
                 }.value
+                diagnostics.record(
+                    .info,
+                    category: "handoff",
+                    message: "Collection handoff prepared",
+                    fields: [
+                        "requestID": handoff.request.requestID.uuidString,
+                        "files": String(manifest.fileCount)
+                    ]
+                )
                 collectionExportStatus = "OPENING EDIT950…"
                 let configuration = NSWorkspace.OpenConfiguration()
                 configuration.activates = true
@@ -1466,6 +1942,17 @@ final class Find950Model: ObservableObject {
                             )
                         }
                     }
+                )
+                diagnostics.record(
+                    response.status == .completed ? .info : .warning,
+                    category: "handoff",
+                    message: "EDIT950 returned a terminal collection-export response",
+                    fields: [
+                        "requestID": response.requestID.uuidString,
+                        "status": response.status.rawValue,
+                        "errorCode": response.errorCode ?? "none",
+                        "summary": response.summary ?? "none"
+                    ]
                 )
                 switch response.status {
                 case .completed:
@@ -1807,6 +2294,13 @@ final class Find950Model: ObservableObject {
             errorMessage = "Couldn’t use that library data location: \(error.localizedDescription)"
         }
     }
+
+    private static func diagnosticFileStamp() -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter.string(from: Date())
+    }
 }
 
 private enum BrowserError: LocalizedError {
@@ -1902,6 +2396,20 @@ private struct LibrarySettingsView: View {
                 Text("AKAI Util is included with FIND950 and is used read-only to inspect IMG files and prepare temporary audition audio. No separate download, path selection or Terminal setup is required. Safe Eject is handled by native FIND950 code.")
                     .font(SuiteFont.regular(10))
                     .foregroundStyle(Color.suiteUnit)
+            }
+            Section("DIAGNOSTICS") {
+                Toggle(
+                    "OPEN DIAGNOSTIC LOG WHEN AN ERROR OCCURS",
+                    isOn: $model.autoOpenDiagnosticLogOnError
+                )
+                Text("FIND950 continuously keeps a size-limited, user-readable activity timeline. It records actions, dialogue state, scans, exports, handoffs and errors—not IMG, program, sample or audio contents. Home and temporary paths are shortened.")
+                    .font(SuiteFont.regular(10))
+                    .foregroundStyle(Color.suiteUnit)
+                HStack {
+                    Button("Show Live Log") { model.isLogVisible = true }
+                    Button("Save Copy…") { model.saveDiagnosticLog() }
+                    Button("Reveal in Finder") { model.revealDiagnosticLog() }
+                }
             }
             Section("CLEAN EJECT") {
                 Text("FIND950 applies the enabled metadata rules, including AppleDouble ._* sidecars, and verifies that every match is gone before ejecting. Full Disk Access is required to remove protected .Spotlight-V100 data.")
