@@ -101,6 +101,7 @@ fi
 
 cp README.md "$PACKAGE_DIR/README.md"
 cp LICENSE "$PACKAGE_DIR/LICENSE"
+cp LICENSING.md "$PACKAGE_DIR/LICENSING.md"
 ditto docs "$PACKAGE_DIR/docs"
 ditto ThirdParty/akaiutil-4.6.7 "$PACKAGE_DIR/AKAI-Util-Source"
 (
@@ -110,7 +111,7 @@ ditto ThirdParty/akaiutil-4.6.7 "$PACKAGE_DIR/AKAI-Util-Source"
         FIND950.app/Contents/Resources/akaiutil \
         FIND950.app/Contents/Info.plist \
         README.md docs/USER_GUIDE.md \
-        LICENSE > SHA256SUMS.txt
+        LICENSE LICENSING.md > SHA256SUMS.txt
 )
 
 mkdir -p "$OUTPUT_DIR"

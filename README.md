@@ -7,7 +7,7 @@
 <p align="center"><strong>BROWSE · SEARCH · COLLECT</strong></p>
 
 [![macOS Swift CI](https://github.com/richiewarburton/FIND950/actions/workflows/ci.yml/badge.svg)](https://github.com/richiewarburton/FIND950/actions/workflows/ci.yml)
-[![MIT License](https://img.shields.io/badge/license-MIT-3455ff.svg)](LICENSE)
+[![PolyForm Internal Use](https://img.shields.io/badge/license-PolyForm%20Internal%20Use-3455ff.svg)](LICENSING.md)
 
 ## Make a folder of old sampler disks feel like a searchable library
 
@@ -32,7 +32,7 @@ FIND950 indexes that folder and lets you:
 The source images are opened **read-only**. Scanning, searching, tagging and
 auditioning cannot alter your archive. You do not need the original sampler.
 
-Current version: **0.2.4 (build 6)**. Requires macOS 14 or later.
+Current version: **0.2.5 (build 7)**. Requires macOS 14 or later.
 
 ![FIND950 searching a multi-folder IMG library](docs/images/find950-library.png)
 
@@ -201,8 +201,15 @@ swift test
 This community project is not affiliated with, endorsed by or sponsored by
 Akai Professional. “Akai” and “S950” are trademarks of their respective owners.
 
-The repository is licensed under the [MIT License](LICENSE). Third-party tools,
-sample libraries, disk images, trademarks and documentation retain their own
-licences and terms. AKAI Util is GPL-2.0-or-later; its exact corresponding
-source, licence and provenance are included under `ThirdParty/akaiutil-4.6.7`
-and in packaged releases.
+Current original FIND950 material is source-available under the
+[PolyForm Internal Use License 1.0.0](LICENSE), with
+[additional permission](LICENSING.md) for personal, educational and internal
+professional use—including paid music work. Distributing, bundling, hosting or
+selling FIND950 requires a separate written agreement from Richie Warburton.
+Historical MIT versions retain their earlier terms.
+
+Third-party tools, sample libraries, disk images, trademarks and documentation
+retain their own licences and terms. AKAI Util is GPL-2.0-or-later; its exact
+corresponding source, licence and provenance are included under
+`ThirdParty/akaiutil-4.6.7` and in packaged releases. JetBrains Mono remains
+under the SIL Open Font License 1.1.
