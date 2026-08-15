@@ -56,6 +56,7 @@ struct FIND950App: App {
             }
             .background(Color.suiteBackground)
             .environmentObject(suitePreferences)
+            .preferredColorScheme(suitePreferences.appearance.colorScheme)
             .onAppear { model.undoManager = undoHistory.manager }
             .frame(minWidth: 880, minHeight: 520)
             .sheet(isPresented: $showAbout) {
@@ -123,6 +124,20 @@ struct FIND950App: App {
                     suitePreferences.collectionVisible.toggle()
                 }
                 Divider()
+                Menu("Appearance") {
+                    ForEach(SuiteAppearance.allCases) { appearance in
+                        Button {
+                            suitePreferences.appearance = appearance
+                        } label: {
+                            if suitePreferences.appearance == appearance {
+                                Label(appearance.title, systemImage: "checkmark")
+                            } else {
+                                Text(appearance.title)
+                            }
+                        }
+                    }
+                }
+                Divider()
                 Button("Zoom Out") { suitePreferences.zoomOut() }
                     .keyboardShortcut("-", modifiers: .command)
                     .disabled(suitePreferences.zoom == .fifty)
@@ -148,6 +163,7 @@ struct FIND950App: App {
         Settings {
             LibrarySettingsView(model: model)
                 .environmentObject(suitePreferences)
+                .preferredColorScheme(suitePreferences.appearance.colorScheme)
                 .suiteSurface()
         }
     }
@@ -569,10 +585,10 @@ final class Find950Model: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let model = self else { return }
             Task { @MainActor in
-                model.refreshMediaVolumes()
-                if !model.folderURLs.isEmpty { model.scanFolders() }
+                guard let self else { return }
+                self.refreshMediaVolumes()
+                if !self.folderURLs.isEmpty { self.scanFolders() }
             }
         })
         for name in [NSWorkspace.didUnmountNotification, NSWorkspace.didRenameVolumeNotification] {
@@ -581,8 +597,7 @@ final class Find950Model: ObservableObject {
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
-                guard let model = self else { return }
-                Task { @MainActor in model.refreshMediaVolumes() }
+                Task { @MainActor in self?.refreshMediaVolumes() }
             })
         }
         rebuildEntryLookup()
@@ -2378,6 +2393,12 @@ private struct LibrarySettingsView: View {
     var body: some View {
         Form {
             Section("APPEARANCE") {
+                Picker("THEME", selection: $preferences.appearance) {
+                    ForEach(SuiteAppearance.allCases) { appearance in
+                        Text(appearance.title).tag(appearance)
+                    }
+                }
+                .pickerStyle(.segmented)
                 Picker("DISPLAY ZOOM", selection: $preferences.zoom) {
                     ForEach(SuiteZoomLevel.allCases) { zoom in
                         Text(zoom.title).tag(zoom)

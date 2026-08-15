@@ -173,8 +173,16 @@ EDIT950 performs the actual disk creation and verifies the finished IMG.
 
 ## Keep the library comfortable
 
-Open **FIND950 → Settings** to change the display size, row spacing, sidebar and
-inspector. These choices only affect how FIND950 looks.
+Open **FIND950 → Settings** to choose the System, Light or Dark appearance,
+display size, row spacing, sidebar, inspector and collection pane. Appearance
+is also available from the View menu and is shared with other supporting
+950TOOLS applications. Display zoom and pane visibility remain specific to
+FIND950.
+
+![FIND950 appearance, included helper and diagnostic settings](images/user-guide/find950-settings.png)
+
+The same Settings window confirms the included AKAI Util version and provides
+direct controls for the live diagnostic log.
 
 Safe Eject cleanup rules are also available in Settings. FIND950 previews every
 matched metadata item before deletion, then re-scans the volume. If macOS
@@ -194,8 +202,9 @@ same media returns.
 The **Diagnostic Log** control shows a persistent, size-limited activity
 timeline. It records actions and errors, not IMG or audio contents, and shortens
 home and temporary paths. Use its **Copy**, **Save**, **Reveal** and **Clear**
-buttons when an intermittent problem is difficult to describe. Settings can
-open the log automatically when an error occurs.
+buttons when an intermittent problem is difficult to describe. **Show Live
+Log**, **Save Copy** and **Reveal in Finder** are also available in Settings,
+which can open the log automatically when an error occurs.
 
 You can also choose where the search index and shared tag file live. Moving the
 index does not move your IMG collection.

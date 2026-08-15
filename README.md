@@ -9,6 +9,8 @@
 [![macOS Swift CI](https://github.com/richiewarburton/FIND950/actions/workflows/ci.yml/badge.svg)](https://github.com/richiewarburton/FIND950/actions/workflows/ci.yml)
 [![PolyForm Internal Use](https://img.shields.io/badge/license-PolyForm%20Internal%20Use-3455ff.svg)](LICENSING.md)
 
+**User manual:** [Read the FIND950 musician's guide](docs/USER_GUIDE.md).
+
 ## Make a folder of old sampler disks feel like a searchable library
 
 You did the difficult part: the S900/S950 floppies were rescued as `.img` files
@@ -32,9 +34,9 @@ FIND950 indexes that folder and lets you:
 The source images are opened **read-only**. Scanning, searching, tagging and
 auditioning cannot alter your archive. You do not need the original sampler.
 
-Current version: **0.2.6 (build 8)**. Requires macOS 14 or later.
+Current version: **0.2.7 (build 9)**. Requires macOS 14 or later.
 
-### What is new in 0.2.6
+### What is new in 0.2.7
 
 - a persistent, user-visible diagnostic timeline records scans, selections,
   audition preparation, exports, handoffs, errors and Safe Eject activity without
@@ -43,9 +45,12 @@ Current version: **0.2.6 (build 8)**. Requires macOS 14 or later.
   automatically when an error occurs; and
 - FIND950 and EDIT950 now coordinate use of removable volumes, so active work in
   either app blocks Safe Eject before metadata cleanup begins while an idle
-  cached FIND950 catalogue remains available offline after a successful eject.
+  cached FIND950 catalogue remains available offline after a successful eject;
+  and
+- System, Light and Dark appearances can be selected from Settings or the View
+  menu and are shared with other supporting 950TOOLS applications.
 
-See [the complete 0.2.6 release notes](docs/RELEASE_NOTES_0.2.6.md).
+See [the complete 0.2.7 release notes](docs/RELEASE_NOTES_0.2.7.md).
 
 ![FIND950 searching a multi-folder IMG library](docs/images/find950-library.png)
 
@@ -99,6 +104,15 @@ read-only to inspect IMG files and prepare temporary audition audio.
 
 Safe Eject and removable-media metadata cleanup are handled separately by
 native FIND950 code; they do not use AKAI Util.
+
+## Appearance and diagnostics
+
+Settings provides System, Light and Dark themes, Display zoom, table density
+and visibility controls for the folders, inspector and collection panes. The
+diagnostic section controls the rolling activity log and provides direct Show,
+Save and Reveal actions.
+
+![FIND950 appearance and diagnostic settings](docs/images/user-guide/find950-settings.png)
 
 ## What is preserved
 
@@ -196,6 +210,7 @@ Working now:
 - program-to-sample dependency lookup;
 - temporary read-only sample audition;
 - cached launch with changed-image background refresh;
+- System, Light and Dark appearances plus four Display zoom levels;
 - direct Open in EDIT950 and PLAY950 actions; and
 - verified protocol-v1 focused and exact-collection export handoffs to EDIT950.
 

@@ -103,6 +103,22 @@ enum SuiteZoomLevel: Double, CaseIterable, Identifiable {
     var title: String { "\(Int(rawValue * 100))%" }
 }
 
+enum SuiteAppearance: String, CaseIterable, Identifiable {
+    case system
+    case light
+    case dark
+
+    var id: String { rawValue }
+    var title: String { rawValue.uppercased() }
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+}
+
 @MainActor
 final class SuitePreferences: ObservableObject {
     static let notification = Notification.Name("com.e45recordings.950tools.preferences.changed")
@@ -112,6 +128,7 @@ final class SuitePreferences: ObservableObject {
     @Published var inspectorVisible: Bool { didSet { persistInspector() } }
     @Published var collectionVisible: Bool { didSet { persistCollection() } }
     @Published var zoom: SuiteZoomLevel { didSet { persistZoom() } }
+    @Published var appearance: SuiteAppearance { didSet { persistAppearance() } }
 
     let app: SuiteApp
     private let defaults: UserDefaults
@@ -139,6 +156,9 @@ final class SuitePreferences: ObservableObject {
         zoom = SuiteZoomLevel(
             rawValue: defaults.double(forKey: "suite.zoom.\(app.rawValue)")
         ) ?? .oneHundred
+        appearance = SuiteAppearance(
+            rawValue: defaults.string(forKey: "suite.appearance") ?? ""
+        ) ?? .system
         observer = DistributedNotificationCenter.default().addObserver(
             forName: Self.notification,
             object: nil,
@@ -180,6 +200,12 @@ final class SuitePreferences: ObservableObject {
     private func persistZoom() {
         guard !isReloading else { return }
         defaults.set(zoom.rawValue, forKey: "suite.zoom.\(app.rawValue)")
+        notify()
+    }
+
+    private func persistAppearance() {
+        guard !isReloading else { return }
+        defaults.set(appearance.rawValue, forKey: "suite.appearance")
         notify()
     }
 
@@ -227,6 +253,9 @@ final class SuitePreferences: ObservableObject {
         zoom = SuiteZoomLevel(
             rawValue: defaults.double(forKey: "suite.zoom.\(app.rawValue)")
         ) ?? .oneHundred
+        appearance = SuiteAppearance(
+            rawValue: defaults.string(forKey: "suite.appearance") ?? ""
+        ) ?? .system
         isReloading = false
     }
 }
