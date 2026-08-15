@@ -585,10 +585,10 @@ final class Find950Model: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
+            guard let model = self else { return }
             Task { @MainActor in
-                guard let self else { return }
-                self.refreshMediaVolumes()
-                if !self.folderURLs.isEmpty { self.scanFolders() }
+                model.refreshMediaVolumes()
+                if !model.folderURLs.isEmpty { model.scanFolders() }
             }
         })
         for name in [NSWorkspace.didUnmountNotification, NSWorkspace.didRenameVolumeNotification] {
@@ -597,7 +597,8 @@ final class Find950Model: ObservableObject {
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
-                Task { @MainActor in self?.refreshMediaVolumes() }
+                guard let model = self else { return }
+                Task { @MainActor in model.refreshMediaVolumes() }
             })
         }
         rebuildEntryLookup()
