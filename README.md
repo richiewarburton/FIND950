@@ -46,6 +46,11 @@ Current version: **0.2.8 (build 10)**. Requires macOS 14 or later.
 
 See [the complete 0.2.8 release notes](docs/RELEASE_NOTES_0.2.8.md).
 
+![FIND950 manual update result](docs/images/user-guide/find950-update-check.png)
+
+*The explicit check reports both the installed version and the latest published
+GitHub release; it never installs anything automatically.*
+
 ![FIND950 searching a multi-folder IMG library](docs/images/find950-library.png)
 
 *Select a disk to see its native P9 and S9 contents, audition samples, follow

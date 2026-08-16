@@ -12,4 +12,5 @@ FIND950 0.2.8 adds a lightweight, musician-controlled update check.
 
 Verification included all 25 package tests, a Universal `arm64`/`x86_64`
 release package, strict code-signature verification, installed-version checks
-and a live GitHub current-version result in the installed application.
+and a live GitHub current-version result in the installed application. The
+manual and README include that actual result as a screenshot of the new flow.
