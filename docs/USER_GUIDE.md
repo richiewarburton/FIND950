@@ -14,8 +14,8 @@ You do not need to understand the file format. These three labels are enough:
 | Label | What it means to a musician |
 | --- | --- |
 | **IMG** | A copy of a complete sampler disk. |
-| **P9 program** | The playable instrument: keyboard zones, tuning, layers, envelopes and output choices. |
-| **S9 sample** | One recording used by a program. |
+| **P9 program** | An AKAI S950/900 program: tuning, layers, filter, envelopes MIDI, outputs. |
+| **S9 sample** | An AKAI S950/900 sample. |
 
 ## Install FIND950
 
