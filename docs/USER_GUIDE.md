@@ -223,6 +223,18 @@ FIND950 will not:
 
 Keep an independent backup anyway. Old disk images are often irreplaceable.
 
+## Check for updates
+
+Choose **FIND950 → Check for Updates…** for an explicit result. FIND950 also
+checks the latest GitHub release once when it launches. If a newer release
+exists, a dismissible notice opens its GitHub release page so you can download
+it yourself. FIND950 never replaces or installs the application automatically.
+
+![FIND950 reporting the installed and latest release versions](images/user-guide/find950-update-check.png)
+
+*This pre-release verification capture shows 0.2.8 installed while 0.2.7 was
+still the latest published release. After publication, both values read 0.2.8.*
+
 ## Quick fixes
 
 ### My folder is present but a new IMG is missing

@@ -35,15 +35,26 @@ struct FIND950App: App {
         app: .find,
         defaultInspectorVisible: true
     )
+    @StateObject private var releaseChecker: GitHubReleaseChecker
     @State private var showAbout = false
 
     init() {
+        let version = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? "DEV"
+        _releaseChecker = StateObject(wrappedValue: GitHubReleaseChecker(
+            product: "FIND950",
+            owner: "richiewarburton",
+            repository: "FIND950",
+            currentVersion: version
+        ))
         SuiteFontGate.validateBundle()
     }
 
     var body: some Scene {
         WindowGroup("FIND950") {
             VStack(spacing: 0) {
+                SuiteUpdateBanner(checker: releaseChecker)
                 SuiteZoomContainer {
                     Find950View(model: model)
                         .suiteSurface()
@@ -58,12 +69,16 @@ struct FIND950App: App {
             .environmentObject(suitePreferences)
             .preferredColorScheme(suitePreferences.appearance.colorScheme)
             .onAppear { model.undoManager = undoHistory.manager }
+            .task { await releaseChecker.startAutomaticCheck() }
             .frame(minWidth: 880, minHeight: 520)
             .sheet(isPresented: $showAbout) {
                 SuiteAboutView(
                     product: "FIND950",
-                    version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "DEV"
+                    version: releaseChecker.currentVersion
                 )
+            }
+            .sheet(isPresented: $releaseChecker.isPresentingResult) {
+                SuiteUpdateResultView(checker: releaseChecker)
             }
         }
         .defaultSize(width: 1240, height: 760)
@@ -78,6 +93,10 @@ struct FIND950App: App {
             }
             CommandGroup(replacing: .appInfo) {
                 Button("ABOUT FIND950…") { showAbout = true }
+                Divider()
+                Button("CHECK FOR UPDATES…") {
+                    Task { await releaseChecker.checkForUpdates(presentResult: true) }
+                }
             }
             CommandGroup(replacing: .newItem) {
                 Button("Add IMG Folders…") { model.addFolders() }
